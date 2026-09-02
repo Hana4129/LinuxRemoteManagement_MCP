@@ -66,8 +66,14 @@ make build
 # Run (generates self-signed cert in ./data)
 make run
 
-# Test
-curl -k -H "Authorization: Bearer <token>" https://localhost:8443/v1/health
+# Health check (no auth)
+curl -k https://localhost:8443/v1/health
+
+# Test with readonly token
+curl -k -H "Authorization: Bearer token1" https://localhost:8443/v1/system
+
+# Test with operator token
+curl -k -H "Authorization: Bearer token2" https://localhost:8443/v1/system
 ```
 
 ## Configuration
