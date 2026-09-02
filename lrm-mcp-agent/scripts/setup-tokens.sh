@@ -155,13 +155,13 @@ echo "Updating $CONFIG_FILE..."
 cp "$CONFIG_FILE" "${CONFIG_FILE}.bak"
 echo "Backup saved to ${CONFIG_FILE}.bak"
 
-# Replace empty hash fields
+# Replace hash fields (both empty and existing)
 hash_index=0
 while IFS= read -r line; do
-    if echo "$line" | grep -qE '^\s+hash:\s*""'; then
+    if echo "$line" | grep -qE '^\s+hash:'; then
         if [ $hash_index -lt ${#HASHES[@]} ] && [ -n "${HASHES[$hash_index]}" ]; then
-            # Replace empty hash with generated hash
-            echo "$line" | sed "s|hash: \"\"|hash: \"${HASHES[$hash_index]}\"|"
+            # Replace hash with generated hash
+            echo "$line" | sed "s|hash: \"[^\"]*\"|hash: \"${HASHES[$hash_index]}\"|"
         else
             echo "$line"
         fi
