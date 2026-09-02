@@ -1,0 +1,61 @@
+agent:
+  name: lrm-mcp-agent
+  listen: ":8443"
+  data_dir: ./data
+  env: production
+
+  tls:
+    # cert_file: /etc/lrm-mcp-agent/server.crt
+    # key_file: /etc/lrm-mcp-agent/server.key
+    auto_tls: true
+    auto_cert_file: ./data/server.crt
+    auto_key_file: ./data/server.key
+
+  tokens:
+    - id: "token-001"
+      name: "readonly-token"
+      hash: ""  # SHA-256 of the raw token (hex)
+      scope: readonly
+      files:
+        - /etc/os-release
+        - /etc/hostname
+        - /var/log/syslog
+    - id: "token-002"
+      name: "operator-token"
+      hash: ""  # SHA-256 of the raw token (hex)
+      scope: operator
+      commands:
+        - /usr/bin/systemctl restart nginx
+        - /usr/bin/systemctl restart docker
+      services:
+        - nginx
+        - docker
+        - sshd
+      files:
+        - /etc/nginx/nginx.conf
+        - /var/log/syslog
+
+  allowlist:
+    commands:
+      - /usr/bin/systemctl restart nginx
+      - /usr/bin/systemctl restart docker
+    services:
+      - nginx
+      - docker
+      - sshd
+    allowed_paths:
+      - /etc/
+      - /var/log/
+    denied_paths:
+      - /etc/shadow
+      - /etc/sudoers
+    max_file_size_mb: 10
+
+  rate_limit:
+    enabled: true
+    per_minute: 60
+    burst: 10
+
+  audit:
+    enabled: true
+    log_file: ./data/audit.log

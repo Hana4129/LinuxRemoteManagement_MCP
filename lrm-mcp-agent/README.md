@@ -1,0 +1,80 @@
+# Linux Agent (Go)
+
+Linux Remote Management Agent - Go implementation.
+
+## Architecture
+
+```
+MCP Server ──HTTPS + Bearer Token──> Linux Agent ──Dedicated User──> OS
+```
+
+## Features
+
+- HTTPS/TLS 1.2+ with auto-generated self-signed certificates
+- Bearer Token authentication (SHA-256 hash comparison, constant-time)
+- Policy-based authorization (readonly/operator scope)
+- Allowlist-based access control (deny by default)
+- Structured API (no shell exposure for MVP operations)
+- JSON audit logging
+- Rate limiting per client IP
+
+## API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | /v1/health | Health check |
+| GET | /v1/system | System info (hostname, OS, kernel, uptime, memory) |
+| GET | /v1/disk | Disk usage (df-based) |
+| GET | /v1/processes | Process list (ps-based, max 100) |
+| GET | /v1/services/{name} | Service status (systemctl is-active) |
+| POST | /v1/services/{name}/restart | Restart service (operator scope) |
+| GET | /v1/services/{name}/logs | Service logs (journalctl) |
+| GET | /v1/files?path=... | Read file (allowlist + denied list) |
+| POST | /v1/execute | Execute command (allowlist, operator scope) |
+
+## Quick Start
+
+```bash
+# Build
+make build
+
+# Run (generates self-signed cert in ./data)
+make run
+
+# Test
+curl -k -H "Authorization: Bearer <token>" https://localhost:8443/v1/health
+```
+
+## Configuration
+
+See `config.yml` for example configuration.
+
+### Token Hash Generation
+
+```bash
+python3 -c "import hashlib; print(hashlib.sha256(b'your-raw-token').hexdigest())"
+```
+
+## Deployment
+
+### systemd
+
+```bash
+sudo ./scripts/setup.sh
+sudo systemctl start lrm-mcp-agent
+```
+
+### Docker
+
+```bash
+make docker
+docker run -p 8443:8443 -v /var/lib/lrm-mcp-agent:/app/data lrm-mcp-agent:latest
+```
+
+## Security Design
+
+- AI ≠ root (dedicated user, not root)
+- Token is authentication, not authorization
+- Structured API preferred over shell
+- Deny by default
+- Token leak assumed (defense in depth)

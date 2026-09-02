@@ -1,0 +1,46 @@
+# =====================================================================
+# Linux Remote Management MCP Server 設定
+#   server : 管理対象ノードの登録
+#   console: 管理コンソール(社内Webページ)の設定
+#   agent  : 各ノードのLinux Agentと通信する際の共通設定
+# ルートは mcp-server/ に置いて `python -m app` から起動する前提。
+# =====================================================================
+
+console:
+  host: 127.0.0.1          # 社内ネットワークからのみアクセス可なホストで listen すること
+  port: 8080
+  data_dir: ./data         # tokens.db (SQLite) 保存先
+  mcp_http: true           # MCP streamable HTTP をコンソールにマウントするか
+  # Basic認証を使う場合はコメントを外す。環境変数 LINUX_MCP_CONSOLE_USER / _PASS でも指定可。
+  # username: admin
+  # password: change-me
+
+agent:
+  timeout_seconds: 3
+  tls_verify: true         # 自己署名証明書の開発環境では false にする
+  user_agent: linux-mcp-server/0.1
+
+# ---- 管理対象ノード ----
+servers:
+  - id: dev-web-01
+    name: "開発 Web #01"
+    url: http://127.0.0.1:8443   # 開発用モックAgent (tools/mock_agent.py)
+    env: development
+    description: モックAgentでの動作確認用
+
+  - id: dev-db-01
+    name: "開発 DB #01"
+    url: http://127.0.0.1:8444
+    env: development
+    description: モックAgentでの動作確認用
+
+  - id: prod-web-01
+    name: "本番 Web #01"
+    url: https://prod-web-01.internal:8443
+    env: production
+    description: 本番Webサーバー（Agent導入済み想定）
+
+  - id: stg-batch-01
+    name: "検証 Batch #01"
+    url: https://stg-batch-01.internal:8443
+    env: staging

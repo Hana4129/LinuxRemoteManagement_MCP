@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# 実行時データ（トークンDB等） - 絶対Gitにコミットしない
+data/
+*.db
+*.db-wal
+*.db-shm
+.env
+
+# ログ
+*.log

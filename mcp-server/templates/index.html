@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Linux Remote Management Console</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="top-title">
+      <span class="logo">&#128031;</span>
+      <h1>Linux Remote Management Console</h1>
+      <span class="version" id="app-version">v0.1.0</span>
+    </div>
+    <nav class="tabs">
+      <button class="tab active" data-tab="nodes" type="button">Nodes</button>
+      <button class="tab" data-tab="tokens" type="button">MCP Tokens</button>
+      <button class="tab" data-tab="approvals" type="button">Approvals</button>
+      <button class="tab" data-tab="help" type="button">Help</button>
+    </nav>
+  </header>
+
+  <main class="main">
+    <section id="tab-nodes" class="tab-panel active">
+      <div class="toolbar">
+        <div id="node-summary" class="summary"></div>
+        <div class="toolbar-actions">
+          <label class="switch"><input type="checkbox" id="auto-reload" checked><span>Auto-refresh 30s</span></label>
+          <button id="reload-nodes" class="btn" type="button">Refresh</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="nodes">
+          <thead>
+            <tr>
+              <th>Node</th><th>Env</th><th>Install status</th><th>OS</th>
+              <th>Kernel</th><th>Hostname</th><th>Uptime</th><th>Agent</th><th>Latency</th><th>Last checked</th>
+            </tr>
+          </thead>
+          <tbody id="nodes-tbody"><tr><td colspan="10" class="loading">Loading...</td></tr></tbody>
+        </table>
+      </div>
+      <p class="hint">"Not installed / Agent not running" means TCP RST on the Agent port. Unreachable = network unreachable.</p>
+    </section>
+
+    <section id="tab-tokens" class="tab-panel">
+      <div class="toolbar">
+        <div id="token-summary" class="summary"></div>
+        <div class="toolbar-actions">
+          <button id="open-token-dialog" class="btn primary" type="button">Issue Token</button>
+          <button id="reload-tokens" class="btn" type="button">Refresh</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="tokens">
+          <thead>
+            <tr>
+              <th>Name</th><th>Token ID</th><th>Prefix</th><th>Scope</th><th>Servers</th>
+              <th>Created</th><th>Expires</th><th>Last used</th><th>Status</th><th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="tokens-tbody"><tr><td colspan="10" class="loading">Loading...</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ===== Approvals ===== -->
+    <section id="tab-approvals" class="tab-panel">
+      <div class="toolbar">
+        <div id="approval-summary" class="summary"></div>
+        <div class="toolbar-actions">
+          <label class="switch"><input type="checkbox" id="approval-auto-reload" checked><span>Auto (10s)</span></label>
+          <button id="reload-approvals" class="btn" type="button">Refresh</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="approvals">
+          <thead>
+            <tr>
+              <th>Approval ID</th><th>Server</th><th>Service</th><th>Reason</th><th>Requested by</th>
+              <th>Requested at</th><th>Expires</th><th>Status</th><th>Approver</th><th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="approvals-tbody"><tr><td colspan="10" class="loading">Loading...</td></tr></tbody>
+        </table>
+      </div>
+      <p class="hint">restart_service requires a human approval. Approve here, then the MCP client re-runs restart_service with the approval_id. Approvals are single-use and expire (TTL 15 min by default).</p>
+    </section>
+
+    <section id="tab-help" class="tab-panel">
+      <div class="help-card">
+        <h2>Management Console</h2>
+        <p>This console is bundled with the MCP Server (FastAPI). It calls each node's Linux Agent via HTTPS with Bearer Token and displays install status, OS version, uptime, etc.</p>
+        <h3>API</h3>
+        <ul>
+          <li><code>GET  /api/meta</code> - app / servers / scopes metadata</li>
+          <li><code>GET  /api/nodes</code> - node list (status resolved)</li>
+          <li><code>GET  /api/nodes/{id}</code> - node detail</li>
+          <li><code>GET  /api/tokens</code> - token list (raw value hidden)</li>
+          <li><code>POST /api/tokens</code> - issue token (raw value returned once)</li>
+          <li><code>POST /api/tokens/import</code> - import externally issued token</li>
+        </ul>
+        <h3>MCP client config (claude_desktop_config.json)</h3>
+        <pre id="mcp-config-snippet"><code>Loading...</code></pre>
+        <p class="hint">Token raw values are stored in data/tokens.db (SQLite, 0600). In production, replace with a Secret Store (Vault, etc). See README.md.</p>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="token-dialog" class="dialog">
+    <form method="dialog" id="issue-form">
+      <h2>Issue Token</h2>
+      <p class="hint">The raw token is shown only on this screen, once.</p>
+      <div class="field"><label>Name</label><input type="text" name="name" id="t-name" placeholder="e.g. CI access" required></div>
+      <div class="field"><label>Scope</label>
+        <select name="scope" id="t-scope">
+          <option value="readonly">readonly (view only)</option>
+          <option value="operator">operator (restart allowed)</option>
+        </select></div>
+      <div class="field"><label>Servers</label><div class="servers" id="t-servers"></div></div>
+      <div class="field"><label>Expiry</label>
+        <select name="expires_in_days" id="t-exp">
+          <option value="">Never</option><option value="7">7 days</option><option value="30">30 days</option><option value="90">90 days</option>
+        </select></div>
+      <div class="dialog-actions"><button type="reset" class="btn">Cancel</button><button type="submit" class="btn primary">Issue</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="token-result" class="dialog">
+    <div class="result">
+      <h2>Token Issued</h2>
+      <p class="hint">Save this token safely. It won't be shown again after you close this dialog.</p>
+      <pre id="raw-token" class="token-box"></pre>
+      <div class="dialog-actions">
+        <button id="copy-token" class="btn primary" type="button">Copy</button>
+        <button id="close-result" class="btn" type="button">Close</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="confirm-dialog" class="dialog">
+    <div class="result">
+      <h2 id="confirm-title">Confirm</h2>
+      <p id="confirm-body"></p>
+      <div class="dialog-actions">
+        <button id="confirm-cancel" class="btn" type="button">Cancel</button>
+        <button id="confirm-ok" class="btn danger" type="button">Execute</button>
+      </div>
+    </div>
+  </dialog>
+
+  <div id="toast"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

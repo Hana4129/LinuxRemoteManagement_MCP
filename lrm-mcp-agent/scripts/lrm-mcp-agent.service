@@ -1,0 +1,22 @@
+[Unit]
+Description=Linux Remote Management Agent
+After=network.target
+
+[Service]
+Type=simple
+User=lrm-mcp-agent
+Group=lrm-mcp-agent
+ExecStart=/usr/local/bin/lrm-mcp-agent --config /etc/lrm-mcp-agent/config.yml
+Restart=on-failure
+RestartSec=5
+WorkingDirectory=/var/lib/lrm-mcp-agent
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/lrm-mcp-agent /var/log/lrm-mcp-agent
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
