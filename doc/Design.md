@@ -1,5 +1,3 @@
-もちろんです。**「AI → MCP → HTTPS API → Linux Agent」という構成を前提に、安全性を重視した設計書**としてまとめます。
-そのまま `linux-mcp-agent-design.md` として保存できる形です。
 
 # Linux Remote Management MCP — Security Design
 
@@ -1246,6 +1244,3 @@ Restricted sudo
 Linux
 ```
 
-とする。
-
-必要なら次に、これをそのまま実装できるように **「Python製MCP Server + Go製Linux Agent」のディレクトリ構成・API仕様・DB schema・Docker Composeまで含めた実装設計**に落とし込めます。
