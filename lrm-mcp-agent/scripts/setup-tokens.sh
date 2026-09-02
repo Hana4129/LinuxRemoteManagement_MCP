@@ -56,7 +56,7 @@ prompt_token() {
     echo "--- Token: $token_id ($token_name, scope: $scope) ---"
 
     while true; do
-        read -p "  Enter raw token (or press Enter to skip): " raw_token
+        read -p "  Enter raw token for '$token_name' (scope: $scope, or press Enter to skip): " raw_token
         echo ""
 
         if [ -z "$raw_token" ]; then
@@ -65,7 +65,7 @@ prompt_token() {
             return 1
         fi
 
-        read -p "  Confirm raw token: " confirm_token
+        read -p "  Confirm raw token for '$token_name': " confirm_token
         echo ""
 
         if [ "$raw_token" != "$confirm_token" ]; then
