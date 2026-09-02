@@ -155,6 +155,9 @@ echo "Updating $CONFIG_FILE..."
 cp "$CONFIG_FILE" "${CONFIG_FILE}.bak"
 echo "Backup saved to ${CONFIG_FILE}.bak"
 
+# Remember original ownership
+STAT_OWNER=$(stat -c '%U:%G' "$CONFIG_FILE")
+
 # Replace hash fields (both empty and existing)
 hash_index=0
 while IFS= read -r line; do
@@ -173,7 +176,8 @@ done < "$CONFIG_FILE" > "${CONFIG_FILE}.tmp"
 
 mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
 
-# Set proper permissions
+# Restore original ownership and set proper permissions
+chown "$STAT_OWNER" "$CONFIG_FILE"
 chmod 600 "$CONFIG_FILE"
 
 echo ""
