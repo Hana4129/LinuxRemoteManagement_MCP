@@ -138,7 +138,7 @@ echo ""
 # Collect hashes
 declare -a HASHES=()
 for i in "${!TOKEN_IDS[@]}"; do
-    result=$(prompt_token "${TOKEN_IDS[$i]}" "${TOKEN_NAMES[$i]}" "${TOKEN_SCOPES[$i]}" 2>/dev/null)
+    result=$(prompt_token "${TOKEN_IDS[$i]}" "${TOKEN_NAMES[$i]}" "${TOKEN_SCOPES[$i]}")
     hash=$(echo "$result" | grep -E '^[a-f0-9]{64}$')
 
     if [ -n "$hash" ] && [ ${#hash} -eq 64 ]; then
