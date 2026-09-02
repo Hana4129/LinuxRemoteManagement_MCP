@@ -56,8 +56,8 @@ fi
 
 echo ""
 echo "=== Setup complete ==="
+echo ""
 echo "Next steps:"
-echo "  1. Edit $CONFIG_DIR/config.yml with your tokens"
-echo "  2. Generate token hashes: python3 -c \"import hashlib; print(hashlib.sha256(b'your-token').hexdigest())\""
-echo "  3. Start: systemctl start lrm-mcp-agent"
-echo "  4. Check status: systemctl status lrm-mcp-agent"
+echo "  1. Set up tokens: sudo ./scripts/setup-tokens.sh"
+echo "  2. Start: systemctl start lrm-mcp-agent"
+echo "  3. Check status: systemctl status lrm-mcp-agent"

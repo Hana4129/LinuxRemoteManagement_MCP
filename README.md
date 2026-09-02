@@ -37,9 +37,22 @@ mcp-server/
 
 ### 1. 依存環境
 
+**MCP Server (Python):**
 ```bash
 cd mcp-server
 pip install -r requirements.txt
+```
+
+**Linux Agent (Go 1.22+):**
+```bash
+# Goが未インストールの場合 (Linux)
+wget https://go.dev/dl/go1.22.5.linux-amd64.tar.gz
+sudo rm -rf /usr/local/go
+sudo tar -C /usr/local -xzf go1.22.5.linux-amd64.tar.gz
+export PATH=$PATH:/usr/local/go/bin
+
+# 確認
+go version
 ```
 
 ### 2. 管理コンソール + MCP HTTP サーバー起動

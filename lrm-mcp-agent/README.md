@@ -2,6 +2,31 @@
 
 Linux Remote Management Agent - Go implementation.
 
+## Prerequisites
+
+- **Go 1.22 or later** must be installed.
+
+### Installing Go on Linux
+
+```bash
+# Download (check https://go.dev/dl/ for the latest version)
+wget https://go.dev/dl/go1.22.5.linux-amd64.tar.gz
+
+# Remove any existing Go installation
+sudo rm -rf /usr/local/go
+
+# Extract to /usr/local
+sudo tar -C /usr/local -xzf go1.22.5.linux-amd64.tar.gz
+
+# Add to PATH (add to ~/.bashrc or ~/.profile for persistence)
+export PATH=$PATH:/usr/local/go/bin
+
+# Verify installation
+go version
+```
+
+> If Go is installed but not found in PATH, restart your terminal or run `source ~/.bashrc`.
+
 ## Architecture
 
 ```
@@ -61,6 +86,7 @@ python3 -c "import hashlib; print(hashlib.sha256(b'your-raw-token').hexdigest())
 
 ```bash
 sudo ./scripts/setup.sh
+sudo ./scripts/setup-tokens.sh    # Interactive token setup
 sudo systemctl start lrm-mcp-agent
 ```
 
