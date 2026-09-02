@@ -41,9 +41,14 @@ fi
 # Install config (if not exists)
 if [ ! -f "$CONFIG_DIR/config.yml" ] && [ -f "config.yml" ]; then
     cp config.yml "$CONFIG_DIR/config.yml"
+    echo "Installed config to $CONFIG_DIR/config.yml"
+fi
+
+# Ensure config permissions are correct (always run)
+if [ -f "$CONFIG_DIR/config.yml" ]; then
     chmod 600 "$CONFIG_DIR/config.yml"
     chown "$USER:$GROUP" "$CONFIG_DIR/config.yml"
-    echo "Installed config to $CONFIG_DIR/config.yml"
+    echo "Config permissions set (user: $USER, perm: 600)"
 fi
 
 # Install systemd service
