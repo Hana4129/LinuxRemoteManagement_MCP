@@ -56,7 +56,7 @@ prompt_token() {
     echo "--- Token: $token_id ($token_name, scope: $scope) ---"
 
     while true; do
-        read -s -p "  Enter raw token (or press Enter to skip): " raw_token
+        read -p "  Enter raw token (or press Enter to skip): " raw_token
         echo ""
 
         if [ -z "$raw_token" ]; then
@@ -65,7 +65,7 @@ prompt_token() {
             return 1
         fi
 
-        read -s -p "  Confirm raw token: " confirm_token
+        read -p "  Confirm raw token: " confirm_token
         echo ""
 
         if [ "$raw_token" != "$confirm_token" ]; then
@@ -138,8 +138,8 @@ echo ""
 # Collect hashes
 declare -a HASHES=()
 for i in "${!TOKEN_IDS[@]}"; do
-    result=$(prompt_token "${TOKEN_IDS[$i]}" "${TOKEN_NAMES[$i]}" "${TOKEN_SCOPES[$i]}" && echo "SUCCESS" || echo "SKIP")
-    hash=$(echo "$result" | head -1)
+    result=$(prompt_token "${TOKEN_IDS[$i]}" "${TOKEN_NAMES[$i]}" "${TOKEN_SCOPES[$i]}" 2>/dev/null)
+    hash=$(echo "$result" | grep -E '^[a-f0-9]{64}$')
 
     if [ -n "$hash" ] && [ ${#hash} -eq 64 ]; then
         HASHES+=("$hash")
@@ -162,10 +162,10 @@ while IFS= read -r line; do
         if [ $hash_index -lt ${#HASHES[@]} ] && [ -n "${HASHES[$hash_index]}" ]; then
             # Replace empty hash with generated hash
             echo "$line" | sed "s|hash: \"\"|hash: \"${HASHES[$hash_index]}\"|"
-            hash_index=$((hash_index + 1))
         else
             echo "$line"
         fi
+        hash_index=$((hash_index + 1))
     else
         echo "$line"
     fi
