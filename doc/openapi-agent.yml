@@ -1,0 +1,450 @@
+openapi: 3.0.3
+info:
+  title: Linux Remote Management — Linux Agent API
+  description: |
+    Linux Agent が提供する HTTPS API。
+    MCP Server はこの API を通じてリモートノードを管理する。
+
+    ## 認証
+    すべてのエンドポイントで Bearer Token 認証が必要。
+
+    ```
+    Authorization: Bearer <token>
+    ```
+
+    ## セキュリティ
+    - HTTPS (TLS 1.2+) のみ許可
+    - ファイルアクセスは Agent 側の allowlist で制限
+    - コマンド実行は構造化 API のみ（Shell 経由しない）
+  version: 0.1.0
+  contact:
+    name: Linux Remote Management MCP
+
+servers:
+  - url: https://{hostname}:9443
+    description: Linux Agent (HTTPS)
+    variables:
+      hostname:
+        default: ubuntu-server1.local
+        description: Agent が動作するホスト名またはIPアドレス
+
+tags:
+  - name: health
+    description: ヘルスチェック
+  - name: system
+    description: システム情報
+  - name: services
+    description: systemd サービス操作
+  - name: files
+    description: ファイル読み取り
+
+security:
+  - bearerAuth: []
+
+paths:
+  /v1/health:
+    get:
+      tags: [health]
+      summary: ヘルスチェック
+      description: Agent が稼働しているかを確認する。トークン有効性も兼ねる。
+      operationId: healthCheck
+      responses:
+        '200':
+          description: Agent は正常に稼働中
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /v1/system:
+    get:
+      tags: [system]
+      summary: システム情報取得
+      description: OS、カーネル、稼働時間、メモリなどのシステム基本情報を取得する。
+      operationId: getSystemInfo
+      responses:
+        '200':
+          description: システム情報
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemInfo'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /v1/disk:
+    get:
+      tags: [system]
+      summary: ディスク使用状況取得
+      description: ファイルシステムごとのディスク使用量・使用率を取得する。
+      operationId: getDiskUsage
+      responses:
+        '200':
+          description: ディスク使用状況
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiskResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /v1/processes:
+    get:
+      tags: [system]
+      summary: プロセス一覧取得
+      description: 稼働中のプロセス一覧（PID、ユーザー、CPU使用率、メモリ使用率、コマンド）を取得する。
+      operationId: getProcesses
+      responses:
+        '200':
+          description: プロセス一覧
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProcessResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /v1/services/{service}:
+    get:
+      tags: [services]
+      summary: サービス状態取得
+      description: 指定した systemd サービスの稼働状態を取得する。
+      operationId: getServiceStatus
+      parameters:
+        - $ref: '#/components/parameters/ServiceName'
+      responses:
+        '200':
+          description: サービス状態
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceStatus'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: サービスが存在しない
+
+  /v1/services/{service}/restart:
+    post:
+      tags: [services]
+      summary: サービス再起動
+      description: |
+        指定した systemd サービスを再起動する。
+        **破壊的操作**: operator スコープのトークンが必要。
+      operationId: restartService
+      parameters:
+        - $ref: '#/components/parameters/ServiceName'
+      responses:
+        '200':
+          description: 再起動成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RestartResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: サービスが存在しない
+
+  /v1/services/{service}/logs:
+    get:
+      tags: [services]
+      summary: サービスログ取得
+      description: 指定した systemd サービス（journalctl）のログを取得する。
+      operationId: getServiceLogs
+      parameters:
+        - $ref: '#/components/parameters/ServiceName'
+        - name: lines
+          in: query
+          description: 取得する最大行数
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+      responses:
+        '200':
+          description: サービスログ
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceLogs'
+        '401':
+  /v1/files:
+    get:
+      tags: [files]
+      summary: ファイル読み取り
+      description: |
+        指定したパスのファイル内容を読み取る。
+        **Agent 側の allowlist で許可されたパスのみ読み取り可能。**
+        許可されていないパス（/etc/shadow など）は 403 で拒否される。
+      operationId: readFile
+      parameters:
+        - name: path
+          in: query
+          required: true
+          description: 読み取るファイルの絶対パス
+          schema:
+            type: string
+            example: /etc/nginx/nginx.conf
+      responses:
+        '200':
+          description: ファイル内容
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: パスが許可されていない（allowlist に未登録）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: ファイルが存在しない
+
+components:
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: API Token
+
+  parameters:
+    ServiceName:
+      name: service
+      in: path
+      required: true
+      description: サービス名（systemd unit name）
+      schema:
+        type: string
+        example: nginx
+
+  responses:
+    Unauthorized:
+      description: トークンが未指定または無効
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Forbidden:
+      description: トークンは有効だが権限不足
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+    HealthResponse:
+      type: object
+      required: [status, agent_version, hostname]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+          example: ok
+        agent_version:
+          type: string
+          example: 0.1.0
+        hostname:
+          type: string
+          example: ubuntu-server1
+
+    SystemInfo:
+      type: object
+      required: [hostname, os, kernel, arch, platform, uptime_seconds, agent_version, memory]
+      properties:
+        hostname:
+          type: string
+          example: ubuntu-server1
+        os:
+          type: string
+          example: Ubuntu 24.04
+        kernel:
+          type: string
+          example: 7.0.0-30-generic
+        arch:
+          type: string
+          example: x86_64
+        platform:
+          type: string
+          example: Linux x86_64
+        uptime_seconds:
+          type: integer
+          format: int64
+          example: 259200
+        boot_time:
+          type: string
+          example: "2026-08-26 08:00:00"
+        agent_version:
+          type: string
+          example: 0.1.0
+        memory:
+          type: object
+          properties:
+            total_mb:
+              type: integer
+              example: 7976
+            available_mb:
+              type: integer
+              example: 5123
+            used_percent:
+              type: number
+              example: 36.0
+
+    DiskResponse:
+      type: object
+      required: [filesystems]
+      properties:
+        filesystems:
+          type: array
+          items:
+            $ref: '#/components/schemas/Filesystem'
+
+    Filesystem:
+      type: object
+      required: [device, mount, fstype, total_gb, used_gb, available_gb, use_percent]
+      properties:
+        device:
+          type: string
+          example: /dev/mapper/root
+        mount:
+          type: string
+          example: /
+        fstype:
+          type: string
+          example: ext4
+        total_gb:
+          type: number
+          example: 78.6
+        used_gb:
+          type: number
+          example: 31.2
+        available_gb:
+          type: number
+          example: 43.6
+        use_percent:
+          type: number
+          example: 41.7
+
+    ProcessResponse:
+      type: object
+      required: [processes]
+      properties:
+        processes:
+          type: array
+          items:
+            $ref: '#/components/schemas/Process'
+
+    Process:
+      type: object
+      required: [pid, user, cpu_percent, mem_percent, command]
+      properties:
+        pid:
+          type: integer
+          example: 1
+        user:
+          type: string
+          example: root
+        cpu_percent:
+          type: number
+          example: 0.1
+        mem_percent:
+          type: number
+          example: 0.4
+        command:
+          type: string
+          example: /sbin/init splash
+
+    ServiceStatus:
+      type: object
+      required: [service, active, status, enabled]
+      properties:
+        service:
+          type: string
+          example: nginx
+        active:
+          type: boolean
+          example: true
+        status:
+          type: string
+          enum: [running, stopped, failed, inactive]
+          example: running
+        enabled:
+          type: boolean
+          example: true
+
+    RestartResponse:
+      type: object
+      required: [success, service, status]
+      properties:
+        success:
+          type: boolean
+          example: true
+        service:
+          type: string
+          example: nginx
+        status:
+          type: string
+          example: running
+
+    ServiceLogs:
+      type: object
+      required: [service, lines, total]
+      properties:
+        service:
+          type: string
+          example: nginx
+        lines:
+          type: array
+          items:
+            type: string
+          example:
+            - "nginx[42]: starting up"
+            - "nginx[42]: listening on 0.0.0.0:80"
+        total:
+          type: integer
+          example: 4
+        truncated:
+          type: boolean
+          example: false
+
+    FileResponse:
+      type: object
+      required: [path, content]
+      properties:
+        path:
+          type: string
+          example: /etc/nginx/nginx.conf
+        content:
+          type: string
+          example: "user www-data;\nworker_processes auto;\n"
+
+    ErrorResponse:
+      type: object
+      required: [error, detail]
+      properties:
+        error:
+          type: string
+          example: unauthorized
+        detail:
+          type: string
+          example: invalid or missing token

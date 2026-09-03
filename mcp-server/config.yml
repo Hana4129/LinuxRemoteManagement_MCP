@@ -16,8 +16,8 @@ console:
   # password: change-me
 
 agent:
-  timeout_seconds: 3
-  tls_verify: true         # 自己署名証明書の開発環境では false にする
+  timeout_seconds: 5
+  tls_verify: false        # 自己署名証明書の開発環境では false にする
   user_agent: linux-mcp-server/0.1
 
 # ---- 管理対象ノード ----
@@ -33,6 +33,12 @@ servers:
     url: http://127.0.0.1:8444
     env: development
     description: モックAgentでの動作確認用
+
+  - id: ubuntu-server1
+    name: "Ubuntu Server #01"
+    url: https://ubuntu-server1.local:9443
+    env: production
+    description: リモートUbuntuサーバー（Agent導入済み・token2設定）
 
   - id: prod-web-01
     name: "本番 Web #01"
