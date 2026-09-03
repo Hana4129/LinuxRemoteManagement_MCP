@@ -20,6 +20,20 @@ echo.
 echo   管理コンソール : http://127.0.0.1:8080/
 echo   MCP endpoint  : http://127.0.0.1:8080/mcp
 echo.
+
+REM ---- ポート使用中チェック ----
+netstat -ano | findstr ":8080 " | findstr "LISTENING" >nul 2>&1
+if %errorlevel% equ 0 (
+    echo   [ERROR] ポート 8080 は既に使用されています。
+    echo.
+    echo   以下のコマンドで占用プロセスを確認できます:
+    echo     netstat -ano ^| findstr ":8080"
+    echo     tasklist ^| findstr "〈PID〉"
+    echo.
+    pause
+    exit /b 1
+)
+
 echo   Ctrl+C で停止
 echo ============================================
 echo.
