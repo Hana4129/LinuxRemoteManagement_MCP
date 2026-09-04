@@ -16,15 +16,47 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 PORT=8080
+VENV_DIR="${SCRIPT_DIR}/.venv"
+SETUP_MARKER="${VENV_DIR}/.setup_complete"
 
 echo ""
 echo "============================================"
 echo "  Linux Remote Management MCP Server"
 echo "============================================"
 echo ""
-echo "  管理コンソール : http://127.0.0.1:${PORT}/"
-echo "  MCP endpoint  : http://127.0.0.1:${PORT}/mcp"
-echo ""
+
+# ---- セットアップ完了チェック ----
+setup_needed=false
+
+if [ ! -d "$VENV_DIR" ]; then
+    echo "  [INFO] 仮想環境が見つかりません。セットアップが必要です。"
+    setup_needed=true
+elif [ ! -f "$SETUP_MARKER" ]; then
+    echo "  [INFO] セットアップが完了していません。セットアップを実行します。"
+    setup_needed=true
+elif [ ! -f "${VENV_DIR}/bin/python" ] && [ ! -f "${VENV_DIR}/Scripts/python.exe" ]; then
+    echo "  [INFO] 仮想環境が破損していますを再セットアップします。"
+    setup_needed=true
+fi
+
+if [ "$setup_needed" = true ]; then
+    echo ""
+    echo "  セットアップを実行中..."
+    echo ""
+    bash "${SCRIPT_DIR}/scripts/setup.sh"
+    echo ""
+fi
+
+# ---- 仮想環境のアクティベート ----
+if [ -f "${VENV_DIR}/bin/activate" ]; then
+    source "${VENV_DIR}/bin/activate"
+elif [ -f "${VENV_DIR}/Scripts/activate" ]; then
+    source "${VENV_DIR}/Scripts/activate"
+else
+    echo "  [ERROR] 仮想環境のアクティベートに失敗しました。"
+    echo " 手動でセットアップを実行してください: ./scripts/setup.sh"
+    exit 1
+fi
 
 # ---- ポート使用中チェック ----
 if command -v lsof >/dev/null 2>&1; then
@@ -49,6 +81,9 @@ elif command -v ss >/dev/null 2>&1; then
     fi
 fi
 
+echo "  管理コンソール : http://127.0.0.1:${PORT}/"
+echo "  MCP endpoint  : http://127.0.0.1:${PORT}/mcp"
+echo ""
 echo "  Ctrl+C で停止"
 echo "============================================"
 echo ""

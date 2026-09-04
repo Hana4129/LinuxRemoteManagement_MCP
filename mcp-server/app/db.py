@@ -24,7 +24,7 @@ from .tokens import (
     token_prefix,
 )
 
-_SCHEMA = """
+_SCHEMA_TABLES = """
 CREATE TABLE IF NOT EXISTS tokens (
     id            TEXT PRIMARY KEY,
     name          TEXT NOT NULL,
@@ -52,7 +52,9 @@ CREATE TABLE IF NOT EXISTS token_rotations (
     FOREIGN KEY (old_token_id) REFERENCES tokens(id),
     FOREIGN KEY (new_token_id) REFERENCES tokens(id)
 );
+"""
 
+_SCHEMA_INDEXES = """
 CREATE INDEX IF NOT EXISTS idx_tokens_rotated_from ON tokens(rotated_from);
 CREATE INDEX IF NOT EXISTS idx_token_rotations_old ON token_rotations(old_token_id);
 CREATE INDEX IF NOT EXISTS idx_token_rotations_new ON token_rotations(new_token_id);
@@ -112,11 +114,21 @@ class TokenStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = RLock()
         with self._connect() as conn:
-            conn.executescript(_SCHEMA)
+            conn.executescript(_SCHEMA_TABLES)
+            self._migrate(conn)
+            conn.executescript(_SCHEMA_INDEXES)
         try:
             os.chmod(self.db_path, 0o600)
         except OSError:
             pass
+
+    def _migrate(self, conn: sqlite3.Connection) -> None:
+        """既存DBに対して必要なカラムを追加するマイグレーション。"""
+        existing = {row["name"] for row in conn.execute("PRAGMA table_info(tokens)")}
+        if "rotated_from" not in existing:
+            conn.execute("ALTER TABLE tokens ADD COLUMN rotated_from TEXT")
+        if "grace_ends_at" not in existing:
+            conn.execute("ALTER TABLE tokens ADD COLUMN grace_ends_at TEXT")
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, timeout=10)
