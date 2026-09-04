@@ -15,15 +15,16 @@ type Config struct {
 }
 
 type AgentConfig struct {
-	Name      string       `yaml:"name"`
-	Listen    string       `yaml:"listen"`
-	DataDir   string       `yaml:"data_dir"`
-	Env       string       `yaml:"env"`
-	TLS       TLSConfig    `yaml:"tls"`
-	Tokens    []TokenEntry `yaml:"tokens"`
-	Allowlist Allowlist    `yaml:"allowlist"`
-	RateLimit RateLimit    `yaml:"rate_limit"`
-	Audit     AuditConfig  `yaml:"audit"`
+	Name      string          `yaml:"name"`
+	Listen    string          `yaml:"listen"`
+	DataDir   string          `yaml:"data_dir"`
+	Env       string          `yaml:"env"`
+	TLS       TLSConfig       `yaml:"tls"`
+	Tokens    []TokenEntry    `yaml:"tokens"`
+	Allowlist Allowlist       `yaml:"allowlist"`
+	RateLimit RateLimit       `yaml:"rate_limit"`
+	Audit     AuditConfig     `yaml:"audit"`
+	Execution ExecutionConfig `yaml:"execution"`
 }
 
 type TLSConfig struct {
@@ -31,6 +32,9 @@ type TLSConfig struct {
 	KeyFile      string `yaml:"key_file"`
 	AutoCertFile string `yaml:"auto_cert_file"`
 	AutoKeyFile  string `yaml:"auto_key_file"`
+	// ClientCAFile は mTLS 用: クライアント証明書の検証に使う CA 証明書ファイル。
+	// 設定すると、クライアント証明書の提示と検証が必須になる (RequireAndVerifyClientCert)。
+	ClientCAFile string `yaml:"client_ca_file"`
 }
 
 type TokenEntry struct {
@@ -49,6 +53,7 @@ type Allowlist struct {
 	Services      []string `yaml:"services"`
 	AllowedPaths  []string `yaml:"allowed_paths"`
 	DeniedPaths   []string `yaml:"denied_paths"`
+	WritePaths    []string `yaml:"write_paths"`
 	MaxFileSizeMB int      `yaml:"max_file_size_mb"`
 }
 
@@ -59,8 +64,21 @@ type RateLimit struct {
 }
 
 type AuditConfig struct {
-	Enabled bool   `yaml:"enabled"`
-	LogFile string `yaml:"log_file"`
+	Enabled     bool         `yaml:"enabled"`
+	LogFile     string       `yaml:"log_file"`
+	SIEM        SIEMConfig   `yaml:"siem"`
+	AppendOnly  bool         `yaml:"append_only"`
+}
+
+type SIEMConfig struct {
+	Enabled    bool   `yaml:"enabled"`
+	WebhookURL string `yaml:"webhook_url"`
+	APIKey     string `yaml:"api_key"`
+	Format     string `yaml:"format"` // "json", "cef", "leef"
+}
+
+type ExecutionConfig struct {
+	CommandTimeoutSeconds int `yaml:"command_timeout_seconds"`
 }
 
 // Load は指定パスのYAML設定を読み込み、デフォルト値を適用する。
@@ -102,6 +120,9 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Agent.Audit.LogFile == "" {
 		cfg.Agent.Audit.LogFile = cfg.Agent.DataDir + "/audit.log"
+	}
+	if cfg.Agent.Execution.CommandTimeoutSeconds == 0 {
+		cfg.Agent.Execution.CommandTimeoutSeconds = 30
 	}
 	return &cfg, nil
 }

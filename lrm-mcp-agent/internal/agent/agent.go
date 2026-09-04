@@ -6,9 +6,11 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/internal/lrm-mcp-agent/internal/audit"
 	"github.com/internal/lrm-mcp-agent/internal/config"
@@ -33,7 +35,13 @@ type tokenEntry struct {
 }
 
 func New(cfg *config.Config) (*Agent, error) {
-	auditLog, err := audit.New(cfg.Agent.Audit.LogFile, cfg.Agent.Audit.Enabled)
+	siemConfig := audit.SIEMConfig{
+		Enabled:    cfg.Agent.Audit.SIEM.Enabled,
+		WebhookURL: cfg.Agent.Audit.SIEM.WebhookURL,
+		APIKey:     cfg.Agent.Audit.SIEM.APIKey,
+		Format:     cfg.Agent.Audit.SIEM.Format,
+	}
+	auditLog, err := audit.NewWithFullConfig(cfg.Agent.Audit.LogFile, cfg.Agent.Audit.Enabled, audit.DefaultRotationConfig(), siemConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -42,6 +50,7 @@ func New(cfg *config.Config) (*Agent, error) {
 		Services:      cfg.Agent.Allowlist.Services,
 		AllowedPaths:  cfg.Agent.Allowlist.AllowedPaths,
 		DeniedPaths:   cfg.Agent.Allowlist.DeniedPaths,
+		WritePaths:    cfg.Agent.Allowlist.WritePaths,
 		MaxFileSizeMB: cfg.Agent.Allowlist.MaxFileSizeMB,
 	}
 	engine := policy.NewEngine(global)
@@ -97,6 +106,56 @@ func (a *Agent) Shutdown() {
 	}
 }
 
+// Reload replaces the token and policy state from the given config.
+// The server keeps running; only tokens/allowlists are swapped atomically.
+func (a *Agent) Reload(cfg *config.Config) {
+	global := policy.GlobalPolicy{
+		Commands:      cfg.Agent.Allowlist.Commands,
+		Services:      cfg.Agent.Allowlist.Services,
+		AllowedPaths:  cfg.Agent.Allowlist.AllowedPaths,
+		DeniedPaths:   cfg.Agent.Allowlist.DeniedPaths,
+		WritePaths:    cfg.Agent.Allowlist.WritePaths,
+		MaxFileSizeMB: cfg.Agent.Allowlist.MaxFileSizeMB,
+	}
+	engine := policy.NewEngine(global)
+	tokens := make(map[string]tokenEntry)
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	// 認可判定は新しい Engine に対して行う (新旧トークン混在を防ぐ)
+	for _, t := range cfg.Agent.Tokens {
+		var scope policy.Scope
+		if t.Scope == "operator" {
+			scope = policy.ScopeOperator
+		} else {
+			scope = policy.ScopeReadonly
+		}
+		tp := policy.TokenPolicy{
+			ID:       t.ID,
+			Name:     t.Name,
+			Scope:    scope,
+			Commands: t.Commands,
+			Services: t.Services,
+			Files:    t.Files,
+			Disabled: t.Disabled,
+		}
+		engine.AddToken(tp)
+		tokens[t.ID] = tokenEntry{
+			id:          t.ID,
+			name:        t.Name,
+			hash:        t.Hash,
+			scope:       scope,
+			TokenPolicy: tp,
+		}
+	}
+
+	a.engine = engine
+	a.tokens = tokens
+	a.auditLog.Log("system", "config_reload", cfg.Agent.Name, "ok", "", "")
+	log.Printf("agent reloaded: %d tokens active", len(tokens))
+}
+
 func (a *Agent) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/health", a.handleHealth)
@@ -106,14 +165,20 @@ func (a *Agent) Handler() http.Handler {
 	mux.HandleFunc("/v1/services/", a.handleServices)
 	mux.HandleFunc("/v1/files", a.handleFiles)
 	mux.HandleFunc("/v1/execute", a.handleExecute)
+	mux.HandleFunc("/metrics", handleMetrics)
 	return a.middlewareStack(mux)
 }
-
 func (a *Agent) middlewareStack(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		IncrementRequests()
+		if r.URL.Path == "/metrics" || r.URL.Path == "/v1/health" {
+			h.ServeHTTP(w, r)
+			return
+		}
 		if a.cfg.Agent.RateLimit.Enabled {
 			ip := clientIP(r)
 			if !a.rateLimiter.allow(ip) {
+				IncrementRateLimitHits()
 				a.auditLog.Log("anonymous", "rate_limit", r.URL.Path, "denied", "", ip)
 				writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "rate limit exceeded"})
 				return
@@ -121,10 +186,12 @@ func (a *Agent) middlewareStack(h http.Handler) http.Handler {
 		}
 		token, ok := a.authenticate(r)
 		if !ok {
+			IncrementAuthFailures()
 			a.auditLog.Log("anonymous", "auth", r.URL.Path, "unauthorized", "", clientIP(r))
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			return
 		}
+		IncrementAuthSuccess()
 		ctx := withToken(r.Context(), token)
 		h.ServeHTTP(w, r.WithContext(ctx))
 	})
@@ -236,6 +303,14 @@ func (a *Agent) handleFiles(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "path required"})
 		return
 	}
+	if r.Method == http.MethodPost {
+		a.handleFileWrite(w, r, path)
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "GET or POST required"})
+		return
+	}
 	ok, reason := a.engine.CanReadFile(currentToken(r).id, path)
 	if !ok {
 		a.auditLog.Log(currentToken(r).id, "read_file", path, "denied", reason, clientIP(r))
@@ -250,6 +325,32 @@ func (a *Agent) handleFiles(w http.ResponseWriter, r *http.Request) {
 	}
 	a.auditLog.Log(currentToken(r).id, "read_file", path, "ok", "", clientIP(r))
 	writeJSON(w, http.StatusOK, map[string]string{"path": path, "content": content})
+}
+
+// handleFileWrite writes content to path (POST /v1/files?path=...).
+// Writing is destructive: operator scope + write_paths allowlist required.
+func (a *Agent) handleFileWrite(w http.ResponseWriter, r *http.Request, path string) {
+	var req struct {
+		Content string `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		return
+	}
+	ok, reason := a.engine.CanWriteFile(currentToken(r).id, path)
+	if !ok {
+		a.auditLog.Log(currentToken(r).id, "write_file", path, "denied", reason, clientIP(r))
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": reason})
+		return
+	}
+	backup, err := writeFile(path, req.Content, a.cfg.Agent.Allowlist.MaxFileSizeMB)
+	if err != nil {
+		a.auditLog.Log(currentToken(r).id, "write_file", path, "error", err.Error(), clientIP(r))
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	a.auditLog.Log(currentToken(r).id, "write_file", path, "ok", "", clientIP(r))
+	writeJSON(w, http.StatusOK, map[string]string{"path": path, "backup": backup, "status": "written"})
 }
 
 func (a *Agent) handleExecute(w http.ResponseWriter, r *http.Request) {
@@ -270,12 +371,25 @@ func (a *Agent) handleExecute(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": reason})
 		return
 	}
-	result := executeCommand(req.Command)
-	a.auditLog.Log(currentToken(r).id, "execute", req.Command, "ok", "", clientIP(r))
+	timeout := time.Duration(a.cfg.Agent.Execution.CommandTimeoutSeconds) * time.Second
+	result := executeCommandWithTimeout(req.Command, timeout)
+	logResult := "ok"
+	detail := ""
+	if result.TimedOut {
+		logResult = "timeout"
+	} else if strings.Contains(result.Stderr, "forbidden shell metacharacter") ||
+		strings.Contains(result.Stderr, "subshell substitution") {
+		logResult = "rejected"
+		detail = result.Stderr
+	}
+	a.auditLog.Log(currentToken(r).id, "execute", req.Command, logResult, detail, clientIP(r))
 	writeJSON(w, http.StatusOK, result)
 }
 
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {
+	if status >= 400 {
+		IncrementErrors()
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(data)

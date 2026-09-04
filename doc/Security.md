@@ -105,10 +105,10 @@ SIEM
 - ✅ Policy Engine: `internal/policy/engine.go` で認可集中管理（readonly/operator スコープ）
 - ✅ mTLS: Agent 側でクライアント証明書検証対応済み（config.yml で設定）
 - ✅ Restricted sudo: systemd `NoNewPrivileges=true`、`ProtectSystem=strict`
-- ✅ Audit Log: 構造化 JSONL、0600 パーミッション
-- ⚠️ SIEM 連合: 未実装（運用時は Fluentd/Vector 等で `audit.log` を転送）
-- ⚠️ Token rotation: 未実装（運用時に `cmd/gen-token` で定期ローテーション）
-- ⚠️ Immutable audit log: 未実装（運用時に append-only マウント or SIEM 転送）
+- ✅ Audit Log: 構造化 JSONL、0600 パーミッション、ハッシュチェーンによる改ざん防止
+- ✅ SIEM 連合: Webhook によるリアルタイム転送対応（CEF/LEEF/JSON 形式対応）
+- ✅ Token rotation: API によるローテーション対応（グラ期間、履歴管理）
+- ✅ Immutable audit log: ハッシュチェーン実装済み、append-only マウントは運用時設定
 
 ---
 
@@ -126,9 +126,9 @@ SIEM
 | Human Approval | - | ✅ | ✅ | ✅ 実装済み |
 | Policy Engine | - | - | ✅ | ✅ 実装済み |
 | mTLS | - | - | ✅ | ✅ 実装済み |
-| SIEM | - | - | ✅ | ⚠️ 運用時 |
-| Token Rotation | - | - | ✅ | ⚠️ 運用時 |
-| Immutable Log | - | - | ✅ | ⚠️ 運用時 |
+| SIEM | - | - | ✅ | ✅ 実装済み |
+| Token Rotation | - | - | ✅ | ✅ 実装済み |
+| Immutable Log | - | - | ✅ | ✅ 実装済み |
 
 ---
 
@@ -155,3 +155,189 @@ agent:
 - Fluentd / Vector による audit.log の SIEM 転送
 - 四半期ごとの Token ローテーション
 - 監査ログのバックアップとハッシュ検証
+
+### Level 3 SIEM 連携設定例
+
+```yaml
+# config.yml (Agent) - SIEM 転送設定
+agent:
+  audit:
+    enabled: true
+    log_file: /var/log/linux-agent/audit.log
+    siem:
+      enabled: true
+      webhook_url: "https://siem.example.com/api/v1/events"
+      api_key: "${SIEM_API_KEY}"  # 環境変数から読み込み推奨
+      format: "json"  # "json", "cef", "leef" から選択
+```
+
+### Immutable Audit Log 設定例
+
+```bash
+# append-only マウントの設定 (Linux)
+# /etc/fstab に以下を追加
+/var/log/linux-agent /var/log/linux-agent ext4 defaults,append-only 0 2
+
+# または chattr で個別ファイルに設定
+sudo chattr +a /var/log/linux-agent/audit.log
+```
+
+### 監査ログ検証コマンド
+
+```bash
+# 監査ログの完全性を検証
+lrm-mcp-agent -verify-audit /var/log/linux-agent/audit.log
+```
+
+### Token Rotation API
+
+```bash
+# トークンローテーション（グラ期間7日）
+curl -X POST http://localhost:8080/api/tokens/{token_id}/rotate \
+  -H "Content-Type: application/json" \
+  -d '{"grace_period_days": 7, "expires_in_days": 90}'
+
+# ローテーション履歴取得
+curl http://localhost:8080/api/tokens/{token_id}/rotations
+
+# グラ期間経過トークン一括無効化
+curl -X POST http://localhost:8080/api/tokens/cleanup-grace-periods
+```
+
+### Fluentd/Vector 設定例
+
+Fluentd または Vector を使用して audit.log を SIEM に転送する設定例です。
+
+#### Vector 設定 (`vector.toml`)
+
+```toml
+# LRM MCP Agent の audit.log を読み取り
+[sources.audit_log]
+type = "file"
+include = ["/var/log/linux-agent/audit.log"]
+read_from = "end"
+
+# JSON パースとエンリッチメント
+[transforms.parse_audit]
+type = "remap"
+inputs = ["audit_log"]
+source = '''
+. = parse!(.message)
+.timestamp = parse_timestamp!(.timestamp, format: "%+")
+.severity = if .result == "denied" { "high" } else { "low" } else { "medium" }
+'''
+
+# SIEM へ転送 (HTTP シンク)
+[sinks.siem_http]
+type = "http"
+inputs = ["parse_audit"]
+uri = "https://siem.example.com/api/v1/events"
+encoding.codec = "json"
+auth.strategy = "bearer"
+auth.token = "${SIEM_API_KEY}"
+
+# ローカルバックアップ
+[sinks.backup]
+type = "file"
+inputs = ["parse_audit"]
+path = "/var/log/linux-agent/audit-backup-%Y-%m-%d.log"
+encoding.codec = "json"
+```
+
+#### Fluentd 設定 (`fluent.conf`)
+
+```xml
+<source>
+  @type tail
+  path /var/log/linux-agent/audit.log
+  pos_file /var/log/fluentd/audit.log.pos
+  tag lrm.audit
+  <parse>
+    @type json
+    time_key timestamp
+    time_format %Y-%m-%dT%H:%M:%S%z
+  </parse>
+</source>
+
+<filter lrm.audit>
+  @type record_transformer
+  <record>
+    severity ${record["result"] == "denied" ? "high" : "low"}
+    source "lrm-mcp-agent"
+  </record>
+</filter>
+
+<match lrm.audit>
+  @type http
+  endpoint https://siem.example.com/api/v1/events
+  content_type application/json
+  <auth>
+    method bearer
+    token "#{ENV['SIEM_API_KEY']}"
+  </auth>
+  <buffer>
+    @type file
+    path /var/log/fluentd/buffer/audit
+    flush_interval 10s
+  </buffer>
+</match>
+```
+
+### アラートルール設定例
+
+SIEM で設定すべきアラートルールの例です。
+
+#### 認証失敗の検知
+
+```yaml
+# Elastic Security / Wazuh ルール例
+name: "LRM MCP Agent - Multiple Authentication Failures"
+description: "5分以上で5回以上の認証失敗を検知"
+severity: high
+query: |
+  event.module: lrm-mcp-agent AND 
+  event.action: "auth" AND 
+  event.outcome: "failure"
+threshold:
+  count: 5
+  timeframe: 5m
+action:
+  - type: email
+    to: security@example.com
+  - type: webhook
+    url: https://hooks.slack.com/services/xxx
+```
+
+#### 不審な操作の検知
+
+```yaml
+name: "LRM MCP Agent - Suspicious Operations"
+description: "denied 結果の操作が急増した場合に検知"
+severity: medium
+query: |
+  event.module: lrm-mcp-agent AND 
+  event.result: "denied"
+threshold:
+  count: 10
+  timeframe: 10m
+```
+
+#### 改ざん検知
+
+```yaml
+name: "LRM MCP Agent - Audit Log Tampering"
+description: "監査ログの改ざんを検知"
+severity: critical
+query: |
+  event.module: lrm-mcp-agent AND 
+  event.action: "tamper_detected"
+```
+
+### 改ざん検証の定期実行
+
+cron または systemd timer を使用して定期的に監査ログの完全性を検証します。
+
+```bash
+# crontab 例 (毎日午前2時に実行)
+0 2 * * * /usr/local/bin/lrm-mcp-agent -verify-audit /var/log/linux-agent/audit.log || echo "Audit log verification failed" | mail -s "LRM Alert" security@example.com
+```

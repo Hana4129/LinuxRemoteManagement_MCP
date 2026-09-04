@@ -1,4 +1,4 @@
-"""管理コンソール HTTP API。
+""""""""""""管理コンソール HTTP API。
 
 - GET  /api/meta            アプリ/サーバー/スコープのメタ
 - GET  /api/nodes            ノード一覧 (インストール状況/OS/稼働時間を判定済み)
@@ -8,9 +8,12 @@
 - GET  /api/tokens           トークン一覧 (生値は返さない)
 - POST /api/tokens           トークン発行 (生トークンを一度だけ返す)
 - POST /api/tokens/import    外部で発行したトークンを登録
+- POST /api/tokens/{id}/rotate  トークンローテーション
+- GET  /api/tokens/{id}/rotations  ローテーション履歴
 - POST /api/tokens/{id}/revoke  失効
 - DEL  /api/tokens/{id}       削除
-"""
+- POST /api/tokens/cleanup-grace-periods  グラ期間経過トークン一括無効化
+""""""""""""
 
 from __future__ import annotations
 
@@ -39,6 +42,11 @@ class TokenCreateRequest(BaseModel):
     scope: Literal["readonly", "operator"]
     server_ids: list[str] = Field(..., min_length=1, description='アクセス許可するサーバーID ("*" で全許可)')
     expires_in_days: int | None = Field(default=None, ge=1, le=3650, description="有効期限(日)。未指定=無期限")
+
+
+class TokenRotateRequest(BaseModel):
+    grace_period_days: int = Field(default=7, ge=1, le=90, description="新旧トークンのグラ期間(日)")
+    expires_in_days: int | None = Field(default=None, ge=1, le=3650, description="新しいトークンの有効期限(日)")
 
 
 class TokenImportRequest(BaseModel):
@@ -199,6 +207,51 @@ def delete_token(request: Request, token_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=f"トークンが見つかりません: {token_id}")
     deleted = store.delete_token(token_id)
     return {"deleted": deleted, "id": token_id}
+
+
+@tokens_router.post("/{token_id}/rotate")
+def rotate_token(request: Request, token_id: str, payload: TokenRotateRequest) -> dict[str, Any]:
+    """トークンをローテーションする。
+
+    新しいトークンを発行し、古いトークンはgrace_period_daysの間有効（グラ期間）。
+    グラ期間後、古いトークンは自動的に無効化される。
+    """
+    store: TokenStore = request.app.state.store
+    if store.get_token(token_id) is None:
+        raise HTTPException(status_code=404, detail=f"トークンが見つかりません: {token_id}")
+    client_host = request.client.host if request.client is not None else ""
+    try:
+        new_record = store.rotate_token(
+            token_id,
+            grace_period_days=payload.grace_period_days,
+            rotated_by=f"console:{client_host}",
+            expires_in_days=payload.expires_in_days,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    log.info(
+        "トークンローテーション old_id=%s new_id=%s grace_days=%d",
+        token_id, new_record.id, payload.grace_period_days,
+    )
+    return {"token": new_record.token_raw, "record": new_record.to_dict()}
+
+
+@tokens_router.get("/{token_id}/rotations")
+def get_rotation_history(request: Request, token_id: str) -> dict[str, Any]:
+    """トークンのローテーション履歴を取得する。"""
+    store: TokenStore = request.app.state.store
+    if store.get_token(token_id) is None:
+        raise HTTPException(status_code=404, detail=f"トークンが見つかりません: {token_id}")
+    history = store.get_rotation_history(token_id)
+    return {"token_id": token_id, "rotations": history}
+
+
+@tokens_router.post("/cleanup-grace-periods")
+def cleanup_grace_periods(request: Request) -> dict[str, Any]:
+    """グラ期間を経過した古いトークンを一括無効化する。"""
+    store: TokenStore = request.app.state.store
+    count = store.cleanup_expired_grace_periods()
+    return {"cleaned": count}
 
 
 

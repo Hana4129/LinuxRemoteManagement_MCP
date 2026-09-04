@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,8 +37,25 @@ CREATE TABLE IF NOT EXISTS tokens (
     expires_at    TEXT,
     last_used_at  TEXT,
     enabled       INTEGER NOT NULL DEFAULT 1,
-    created_by    TEXT
+    created_by    TEXT,
+    rotated_from  TEXT,
+    grace_ends_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS token_rotations (
+    id              TEXT PRIMARY KEY,
+    old_token_id    TEXT NOT NULL,
+    new_token_id    TEXT NOT NULL,
+    rotated_at      TEXT NOT NULL,
+    grace_ends_at   TEXT NOT NULL,
+    rotated_by      TEXT,
+    FOREIGN KEY (old_token_id) REFERENCES tokens(id),
+    FOREIGN KEY (new_token_id) REFERENCES tokens(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_tokens_rotated_from ON tokens(rotated_from);
+CREATE INDEX IF NOT EXISTS idx_token_rotations_old ON token_rotations(old_token_id);
+CREATE INDEX IF NOT EXISTS idx_token_rotations_new ON token_rotations(new_token_id);
 """
 
 
@@ -55,6 +73,8 @@ class TokenRecord:
     enabled: bool
     token_raw: str = ""
     created_by: str | None = None
+    rotated_from: str | None = None
+    grace_ends_at: str | None = None
 
     @property
     def expired(self) -> bool:
@@ -78,6 +98,8 @@ class TokenRecord:
             "expired": self.expired,
             "active": self.active,
             "created_by": self.created_by,
+            "rotated_from": self.rotated_from,
+            "grace_ends_at": self.grace_ends_at,
         }
         if include_token:
             data["token"] = self.token_raw
@@ -118,6 +140,8 @@ class TokenStore:
             enabled=bool(row["enabled"]),
             token_raw="",
             created_by=row["created_by"],
+            rotated_from=row["rotated_from"],
+            grace_ends_at=row["grace_ends_at"],
         )
 
     def create_token(
@@ -262,3 +286,121 @@ class TokenStore:
         record = self._row_to_record(row)
         record.token_raw = row["token_raw"]
         return record
+
+    def rotate_token(
+        self,
+        old_token_id: str,
+        *,
+        grace_period_days: int = 7,
+        rotated_by: str | None = None,
+        expires_in_days: int | None = None,
+    ) -> TokenRecord:
+        """トークンをローテーションする。
+
+        古いトークンはgrace_period_daysの間有効（グラ期間）、
+        新しいトークンを作成して返す。
+        """
+        old_record = self.get_token(old_token_id)
+        if old_record is None:
+            raise ValueError(f"トークンが見つかりません: {old_token_id}")
+        if not old_record.enabled:
+            raise ValueError(f"トークンは既に無効です: {old_token_id}")
+
+        # 新しいトークンを生成
+        rotation_id = "rot_" + secrets.token_hex(8)
+        new_token_id = new_token_id()
+        raw = generate_token()
+        token_hash = hash_token(raw)
+        prefix = token_prefix(raw)
+        now = now_iso()
+        grace_ends = expiry_iso(grace_period_days)
+        new_expires = expiry_iso(expires_in_days) if expires_in_days else None
+
+        with self._lock, self._connect() as conn:
+            # 新しいトークンを登録
+            for _ in range(5):
+                try:
+                    conn.execute(
+                        """
+                        INSERT INTO tokens
+                        (id, name, token_raw, token_hash, prefix, server_ids, scope,
+                         created_at, expires_at, enabled, created_by, rotated_from, grace_ends_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL, NULL)
+                        """,
+                        (
+                            new_token_id,
+                            old_record.name,
+                            raw,
+                            token_hash,
+                            prefix,
+                            json.dumps(old_record.server_ids),
+                            old_record.scope,
+                            now,
+                            new_expires,
+                            rotated_by,
+                        ),
+                    )
+                    break
+                except sqlite3.IntegrityError:
+                    continue
+            else:
+                raise RuntimeError("トークンローテーションに失敗しました")
+
+            # 古いトークンのgrace_ends_atを設定
+            conn.execute(
+                "UPDATE tokens SET grace_ends_at = ? WHERE id = ?",
+                (grace_ends, old_token_id),
+            )
+
+            # ローテーション履歴を記録
+            conn.execute(
+                """
+                INSERT INTO token_rotations
+                (id, old_token_id, new_token_id, rotated_at, grace_ends_at, rotated_by)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (rotation_id, old_token_id, new_token_id, now, grace_ends, rotated_by),
+            )
+
+        new_record = self.get_token(new_token_id)
+        if new_record is None:
+            raise RuntimeError("トークンローテーション後の取得に失敗しました")
+        new_record.token_raw = raw
+        return new_record
+
+    def get_rotation_history(self, token_id: str) -> list[dict]:
+        """トークンのローテーション履歴を取得する。"""
+        with self._lock, self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM token_rotations
+                WHERE old_token_id = ? OR new_token_id = ?
+                ORDER BY rotated_at DESC
+                """,
+                (token_id, token_id),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def cleanup_expired_grace_periods(self) -> int:
+        """グラ期間を経過した古いトークンを無効にする。"""
+        now = now_iso()
+        with self._lock, self._connect() as conn:
+            cur = conn.execute(
+                """
+                UPDATE tokens SET enabled = 0
+                WHERE enabled = 1 AND grace_ends_at IS NOT NULL AND grace_ends_at < ?
+                """,
+                (now,),
+            )
+            return cur.rowcount
+
+    def is_in_grace_period(self, token_id: str) -> bool:
+        """トークンがグラ期間中か確認する。"""
+        with self._lock, self._connect() as conn:
+            row = conn.execute(
+                "SELECT grace_ends_at FROM tokens WHERE id = ?",
+                (token_id,),
+            ).fetchone()
+        if row is None or row["grace_ends_at"] is None:
+            return False
+        return not is_expired(row["grace_ends_at"])
