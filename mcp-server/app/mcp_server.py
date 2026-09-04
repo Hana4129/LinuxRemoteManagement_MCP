@@ -26,6 +26,7 @@ Human Approval (設計書 §28 Level 3):
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from typing import Any, Awaitable, Callable
@@ -291,5 +292,159 @@ def build_mcp(
         return await _run(
             "restart_service", server, {"service": service, "approval_id": bool(approval_id)}, _call
         )
+
+    # ---- 複数ノード一括操作 ----
+
+    max_parallel = int(getattr(config.console, "max_parallel_nodes", 5) or 5)
+    _semaphore = asyncio.Semaphore(max(1, max_parallel))
+
+    def _resolve_server_ids(servers: list[str] | None) -> list[str]:
+        """servers が空/None/'all' なら全ノード、それ以外は指定IDのリスト。"""
+        if not servers or servers == ["all"]:
+            return list(config.server_ids)
+        return list(servers)
+
+    async def _gather_results(
+        action: str,
+        server_ids: list[str],
+        coro_factory: Callable[[ServerConfig], Awaitable[dict]],
+    ) -> dict:
+        """複数ノードへ同一操作を並列実行し、結果をノードごとに集約する。"""
+
+        async def _run_one(sid: str) -> tuple[str, dict]:
+            async with _semaphore:
+                try:
+                    target = _server(sid)
+                except ValueError as exc:
+                    return sid, {"ok": False, "error_kind": "unknown_server", "error": str(exc)}
+                try:
+                    return sid, await coro_factory(target)
+                except Exception as exc:  # noqa: BLE001 - 1ノードの失敗で全体を止めない
+                    return sid, {"ok": False, "error_kind": type(exc).__name__, "error": str(exc)}
+
+        results = await asyncio.gather(*(_run_one(sid) for sid in server_ids))
+        by_server: dict[str, dict] = {}
+        for sid, res in results:
+            by_server[sid] = res
+        ok_count = sum(1 for r in by_server.values() if r.get("ok"))
+        summary = {
+            "total": len(by_server),
+            "ok": ok_count,
+            "failed": len(by_server) - ok_count,
+        }
+        if audit is not None:
+            audit.log(
+                actor=_actor(server_ids[0] if server_ids else None),
+                action=action,
+                server=None,
+                params={"servers": server_ids},
+                ok=(summary["failed"] == 0),
+                detail=f"ok={summary['ok']}/{summary['total']}",
+            )
+        return {"ok": summary["failed"] == 0, "summary": summary, "results": by_server}
+
+    @mcp.tool
+    async def get_status_all(servers: list[str] | None = None) -> dict:
+        """複数ノードのシステム情報を一括取得する。
+
+        servers にノードIDのリストを指定する (省略または ["all"] で全ノード)。
+        並列実行数は max_parallel_nodes (デフォルト 5) に制限される。
+        結果はノードIDごとに集約して返す。
+        """
+        ids = _resolve_server_ids(servers)
+
+        async def _call(target: ServerConfig) -> dict:
+            async with AgentClient(config, store) as agent:
+                return _payload(await agent.system_info(target))
+
+        return await _gather_results("get_status_all", ids, _call)
+
+    @mcp.tool
+    async def get_service_status_all(servers: list[str] | None = None, service: str = "") -> dict:
+        """複数ノードの指定サービスの稼働状況を一括取得する。
+
+        servers にノードIDのリストを指定する (省略または ["all"] で全ノード)。
+        service は必須。
+        """
+        if not service:
+            return {"ok": False, "error_kind": "missing_service", "error": "service を指定してください。"}
+        ids = _resolve_server_ids(servers)
+
+        async def _call(target: ServerConfig) -> dict:
+            async with AgentClient(config, store) as agent:
+                return _payload(await agent.service_status(target, service))
+
+        return await _gather_results("get_service_status_all", ids, _call)
+
+    @mcp.tool
+    async def restart_service_all(
+        servers: list[str] | None = None, service: str = "", approval_id: str = ""
+    ) -> dict:
+        """複数ノードの指定サービスを一括再起動する (破壊的操作)。
+
+        人間の承認が必須: まず request_restart_approval で各ノードの approval_id を
+        発行し、人間が管理コンソールで承認した後、ノードごとの approval_id を
+        カンマ区切りで渡して実行する (例: "apr_aaa,apr_bbb")。
+        承認は実行時に1回限り消費される。
+        実行には全指定ノードで operator スコープのトークンが必要。
+        """
+        if not service:
+            return {"ok": False, "error_kind": "missing_service", "error": "service を指定してください。"}
+        ids = _resolve_server_ids(servers)
+        approval_map: dict[str, str] = {}
+        if approval_id:
+            for pair in approval_id.split(","):
+                pair = pair.strip()
+                if "=" in pair:
+                    sid, aid = pair.split("=", 1)
+                    approval_map[sid.strip()] = aid.strip()
+                elif len(ids) == 1:
+                    approval_map[ids[0]] = pair
+
+        async def _call(target: ServerConfig) -> dict:
+            aid = approval_map.get(target.id, "")
+            if require_approval:
+                if approvals is None:
+                    return {
+                        "ok": False,
+                        "error_kind": "approval_unavailable",
+                        "error": "承認ストアが初期化されていないため再起動を実行できません。",
+                    }
+                if not aid:
+                    rec = approvals.request(
+                        server_id=target.id,
+                        service=service,
+                        requested_by="mcp",
+                        ttl_minutes=ttl_minutes,
+                    )
+                    return {
+                        "ok": False,
+                        "error_kind": "approval_required",
+                        "error": f"破壊的操作には人間の承認が必要です (server={target.id})。",
+                        "approval": rec.to_dict(),
+                    }
+                rec = approvals.get(aid)
+                if rec is None:
+                    return {"ok": False, "error_kind": "approval_invalid", "error": f"承認が見つかりません: {aid}"}
+                if rec.server_id != target.id or rec.service != service:
+                    return {
+                        "ok": False,
+                        "error_kind": "approval_mismatch",
+                        "error": f"承認の対象が一致しません (server={target.id})。",
+                    }
+                if store.find_token_for_server(target.id, scope="operator") is None:
+                    return {
+                        "ok": False,
+                        "error_kind": "no_token",
+                        "error": f"scope=operator のトークンがありません (server={target.id})。",
+                    }
+                try:
+                    approvals.consume(aid)
+                except ApprovalError as exc:
+                    return {"ok": False, "error_kind": "approval_invalid", "error": str(exc)}
+            async with AgentClient(config, store) as agent:
+                return _payload(await agent.restart_service(target, service))
+
+        return await _gather_results("restart_service_all", ids, _call)
 
     return mcp

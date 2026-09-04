@@ -21,7 +21,7 @@ info:
     name: Linux Remote Management MCP
 
 servers:
-  - url: https://{hostname}:9443
+  - url: https://{hostname}:8443
     description: Linux Agent (HTTPS)
     variables:
       hostname:
@@ -37,6 +37,8 @@ tags:
     description: systemd サービス操作
   - name: files
     description: ファイル読み取り
+  - name: commands
+    description: コマンド実行 (operator スコープ)
 
 security:
   - bearerAuth: []
@@ -46,8 +48,9 @@ paths:
     get:
       tags: [health]
       summary: ヘルスチェック
-      description: Agent が稼働しているかを確認する。トークン有効性も兼ねる。
+      description: Agent が稼働しているかを確認する。認証不要。
       operationId: healthCheck
+      security: []
       responses:
         '200':
           description: Agent は正常に稼働中
@@ -55,10 +58,6 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HealthResponse'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
 
   /v1/system:
     get:
@@ -184,6 +183,10 @@ paths:
               schema:
                 $ref: '#/components/schemas/ServiceLogs'
         '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
   /v1/files:
     get:
       tags: [files]
@@ -218,8 +221,114 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '404':
           description: ファイルが存在しない
+    post:
+      tags: [files]
+      summary: ファイル書き込み
+      description: |
+        指定したパスに内容を書き込む（上書き）。
+        **破壊的操作**: operator スコープ + `write_paths` allowlist が必要。
 
-components:
+        - 相対パスは拒否される
+        - シンボリックリンク経由の書き込みは拒否される
+        - 既存ファイルは `<path>.bak` にバックアップされる
+        - コンテンツサイズは `max_file_size_mb` で制限される
+      operationId: writeFile
+      parameters:
+        - name: path
+          in: query
+          required: true
+          description: 書き込むファイルの絶対パス (write_paths 配下)
+          schema:
+            type: string
+            example: /var/tmp/app-config.yml
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WriteFileRequest'
+      responses:
+        '200':
+          description: 書き込み成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WriteFileResponse'
+        '400':
+          description: JSON が不正 / 相対パス / サイズ超過
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: operator スコープが必要、またはパスが write_paths に未登録
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/execute:
+    post:
+      tags: [commands]
+      summary: コマンド実行
+      description: |
+        allowlist に登録されたコマンドを実行する。
+        **破壊的操作**: operator スコープのトークンが必要。
+
+        - シェルを経由しない (exec 直接呼び出し)
+        - シェルメタ文字 (`;`, `&`, `|`, `` ` ``, `$()`, `>`, `<` 等) は拒否される
+        - 環境変数は最小限のサニタイズ済みセットのみ引き継がれる
+        - タイムアウト (デフォルト 30 秒) でプロセスが強制終了される
+      operationId: executeCommand
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExecuteRequest'
+      responses:
+        '200':
+          description: 実行結果 (タイムアウト時も 200 で timed_out=true を返す)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecuteResponse'
+        '400':
+          description: JSON が不正
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: operator スコープが必要、またはコマンドが allowlist に未登録
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /metrics:
+    get:
+      tags: [health]
+      summary: Prometheus メトリクス取得
+      description: |
+        Prometheus 形式のメトリクスを返す。認証不要。
+
+        提供メトリクス:
+        - `lrm_agent_requests_total` — リクエスト総数
+        - `lrm_agent_requests_errors_total` — エラーレスポンス総数
+        - `lrm_agent_auth_success_total` / `lrm_agent_auth_failures_total` — 認証成功/失敗数
+        - `lrm_agent_rate_limit_hits_total` — レート制限ヒット数
+        - `lrm_agent_uptime_seconds` — Agent 稼働時間
+        - `lrm_agent_memory_bytes` / `lrm_agent_cpu_goroutines` — リソース使用量
+      operationId: getMetrics
+      security: []
+      responses:
+        '200':
+          description: Prometheus 形式のメトリクス
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: |
+                  lrm_agent_requests_total 42
+                  lrm_agent_auth_failures_total 3
+                  lrm_agent_uptime_seconds 86400.00
 
 components:
   securitySchemes:
@@ -438,6 +547,31 @@ components:
           type: string
           example: "user www-data;\nworker_processes auto;\n"
 
+    WriteFileRequest:
+      type: object
+      required: [content]
+      properties:
+        content:
+          type: string
+          description: 書き込むファイル内容
+          example: "key: value\n"
+
+    WriteFileResponse:
+      type: object
+      required: [path, status]
+      properties:
+        path:
+          type: string
+          example: /var/tmp/app-config.yml
+        backup:
+          type: string
+          description: バックアップ先パス (既存ファイルがあった場合のみ)
+          example: /var/tmp/app-config.yml.bak
+        status:
+          type: string
+          enum: [written]
+          example: written
+
     ErrorResponse:
       type: object
       required: [error, detail]
@@ -448,3 +582,37 @@ components:
         detail:
           type: string
           example: invalid or missing token
+
+    ExecuteRequest:
+      type: object
+      required: [command]
+      properties:
+        command:
+          type: string
+          description: 実行するコマンド (allowlist に完全一致する必要がある)
+          example: systemctl restart nginx
+
+    ExecuteResponse:
+      type: object
+      required: [command, exit_code, stdout, stderr, duration]
+      properties:
+        command:
+          type: string
+          example: systemctl restart nginx
+        exit_code:
+          type: integer
+          description: 終了コード (タイムアウト時は 124)
+          example: 0
+        stdout:
+          type: string
+          example: ""
+        stderr:
+          type: string
+          example: ""
+        duration:
+          type: string
+          example: 1.2s
+        timed_out:
+          type: boolean
+          description: タイムアウトで強制終了された場合 true
+          example: false

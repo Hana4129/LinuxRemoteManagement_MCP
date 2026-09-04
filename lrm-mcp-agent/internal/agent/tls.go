@@ -18,6 +18,35 @@ import (
 // LoadOrGenerate は証明書ファイルがあればロードし、無ければ自己署名証明書を
 // 生成してファイルに書き出した上で TLS 設定を返す。
 func LoadOrGenerate(certFile, keyFile string) (*tls.Config, error) {
+	return LoadOrGenerateWithClientCA(certFile, keyFile, "")
+}
+
+// LoadOrGenerateWithClientCA は LoadOrGenerate と同様にサーバー証明書を準備し、さらに
+// clientCAFile が指定された場合は mTLS を有効にする (クライアント証明書の提示と検証が必須)。
+func LoadOrGenerateWithClientCA(certFile, keyFile, clientCAFile string) (*tls.Config, error) {
+	cfg, err := loadOrGenerateBase(certFile, keyFile)
+	if err != nil {
+		return nil, err
+	}
+	if clientCAFile == "" {
+		return cfg, nil
+	}
+	// mTLS: クライアント証明書を CA で検証する
+	caData, err := os.ReadFile(clientCAFile)
+	if err != nil {
+		return nil, fmt.Errorf("read client CA: %w", err)
+	}
+	caPool := x509.NewCertPool()
+	if !caPool.AppendCertsFromPEM(caData) {
+		return nil, fmt.Errorf("failed to parse client CA certs from %s", clientCAFile)
+	}
+	cfg.ClientAuth = tls.RequireAndVerifyClientCert
+	cfg.ClientCAs = caPool
+	return cfg, nil
+}
+
+// loadOrGenerateBase は証明書ファイルがあればロードし、無ければ自己署名証明書を生成する。
+func loadOrGenerateBase(certFile, keyFile string) (*tls.Config, error) {
 	if fileExists(certFile) && fileExists(keyFile) {
 		cert, err := tls.LoadX509KeyPair(certFile, keyFile)
 		if err != nil {

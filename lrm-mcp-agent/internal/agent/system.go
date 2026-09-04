@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"log"
 	"os"
 	"os/exec"
 	"strconv"
@@ -27,11 +28,24 @@ type memInfo struct {
 }
 
 func getSystemInfo() systemInfo {
-	hostname, _ := os.Hostname()
-	out, _ := exec.Command("uname", "-r").Output()
+	hostname, err := os.Hostname()
+	if err != nil {
+		log.Printf("Failed to get hostname: %v", err)
+		hostname = "unknown"
+	}
+
+	out, err := exec.Command("uname", "-r").Output()
+	if err != nil {
+		log.Printf("Failed to get kernel version: %v", err)
+	}
 	kernel := strings.TrimSpace(string(out))
-	out, _ = exec.Command("uname", "-m").Output()
+
+	out, err = exec.Command("uname", "-m").Output()
+	if err != nil {
+		log.Printf("Failed to get architecture: %v", err)
+	}
 	arch := strings.TrimSpace(string(out))
+
 	info := systemInfo{
 		Hostname:     hostname,
 		OS:           readOS(),
@@ -51,6 +65,7 @@ func getSystemInfo() systemInfo {
 func readOS() string {
 	data, err := os.ReadFile("/etc/os-release")
 	if err != nil {
+		log.Printf("Failed to read /etc/os-release: %v", err)
 		return "Linux"
 	}
 	lines := strings.Split(string(data), "\n")
@@ -76,14 +91,17 @@ func readOS() string {
 func getUptime() uint64 {
 	data, err := os.ReadFile("/proc/uptime")
 	if err != nil {
+		log.Printf("Failed to read /proc/uptime: %v", err)
 		return 0
 	}
 	fields := strings.Fields(string(data))
 	if len(fields) == 0 {
+		log.Printf("Empty /proc/uptime")
 		return 0
 	}
 	sec, err := strconv.ParseFloat(fields[0], 64)
 	if err != nil {
+		log.Printf("Failed to parse uptime: %v", err)
 		return 0
 	}
 	return uint64(sec)
@@ -91,6 +109,9 @@ func getUptime() uint64 {
 
 func getBootTime() string {
 	upt := getUptime()
+	if upt == 0 {
+		return "unknown"
+	}
 	boot := time.Now().Add(-time.Duration(upt) * time.Second)
 	return boot.Format("2006-01-02 15:04:05")
 }
@@ -98,6 +119,7 @@ func getBootTime() string {
 func getMemory() *memInfo {
 	data, err := os.ReadFile("/proc/meminfo")
 	if err != nil {
+		log.Printf("Failed to read /proc/meminfo: %v", err)
 		return nil
 	}
 	lines := strings.Split(string(data), "\n")
@@ -106,17 +128,24 @@ func getMemory() *memInfo {
 		if strings.HasPrefix(line, "MemTotal:") {
 			fields := strings.Fields(line)
 			if len(fields) >= 2 {
-				total, _ = strconv.ParseInt(fields[1], 10, 64)
+				total, err = strconv.ParseInt(fields[1], 10, 64)
+				if err != nil {
+					log.Printf("Failed to parse MemTotal: %v", err)
+				}
 			}
 		}
 		if strings.HasPrefix(line, "MemAvailable:") {
 			fields := strings.Fields(line)
 			if len(fields) >= 2 {
-				available, _ = strconv.ParseInt(fields[1], 10, 64)
+				available, err = strconv.ParseInt(fields[1], 10, 64)
+				if err != nil {
+					log.Printf("Failed to parse MemAvailable: %v", err)
+				}
 			}
 		}
 	}
 	if total == 0 {
+		log.Printf("Memory total is 0, cannot calculate memory info")
 		return nil
 	}
 	return &memInfo{
@@ -139,6 +168,7 @@ type diskEntry struct {
 func getDiskUsage() []diskEntry {
 	out, err := exec.Command("df", "-B1", "--output=source,target,fstype,size,used,avail,pcent").Output()
 	if err != nil {
+		log.Printf("Failed to execute df command: %v", err)
 		return nil
 	}
 	var entries []diskEntry
@@ -149,12 +179,29 @@ func getDiskUsage() []diskEntry {
 		}
 		fields := strings.Fields(line)
 		if len(fields) < 7 {
+			log.Printf("Unexpected df output format: %s", line)
 			continue
 		}
-		total, _ := strconv.ParseUint(fields[3], 10, 64)
-		used, _ := strconv.ParseUint(fields[4], 10, 64)
-		avail, _ := strconv.ParseUint(fields[5], 10, 64)
-		pct, _ := strconv.ParseFloat(strings.TrimSuffix(fields[6], "%"), 64)
+		total, err := strconv.ParseUint(fields[3], 10, 64)
+		if err != nil {
+			log.Printf("Failed to parse disk total: %v", err)
+			continue
+		}
+		used, err := strconv.ParseUint(fields[4], 10, 64)
+		if err != nil {
+			log.Printf("Failed to parse disk used: %v", err)
+			continue
+		}
+		avail, err := strconv.ParseUint(fields[5], 10, 64)
+		if err != nil {
+			log.Printf("Failed to parse disk avail: %v", err)
+			continue
+		}
+		pct, err := strconv.ParseFloat(strings.TrimSuffix(fields[6], "%"), 64)
+		if err != nil {
+			log.Printf("Failed to parse disk percent: %v", err)
+			continue
+		}
 		entries = append(entries, diskEntry{
 			Device:     fields[0],
 			Mount:      fields[1],
@@ -179,6 +226,7 @@ type procEntry struct {
 func getProcesses() []procEntry {
 	out, err := exec.Command("ps", "-eo", "pid,user:12,pcpu,pmem,comm", "--no-headers").Output()
 	if err != nil {
+		log.Printf("Failed to execute ps command: %v", err)
 		return nil
 	}
 	var entries []procEntry
@@ -189,11 +237,24 @@ func getProcesses() []procEntry {
 		}
 		fields := strings.Fields(line)
 		if len(fields) < 5 {
+			log.Printf("Unexpected ps output format: %s", line)
 			continue
 		}
-		pid, _ := strconv.Atoi(fields[0])
-		cpu, _ := strconv.ParseFloat(fields[2], 64)
-		mem, _ := strconv.ParseFloat(fields[3], 64)
+		pid, err := strconv.Atoi(fields[0])
+		if err != nil {
+			log.Printf("Failed to parse PID: %v", err)
+			continue
+		}
+		cpu, err := strconv.ParseFloat(fields[2], 64)
+		if err != nil {
+			log.Printf("Failed to parse CPU percent: %v", err)
+			continue
+		}
+		mem, err := strconv.ParseFloat(fields[3], 64)
+		if err != nil {
+			log.Printf("Failed to parse memory percent: %v", err)
+			continue
+		}
 		entries = append(entries, procEntry{
 			PID:        pid,
 			User:       fields[1],

@@ -243,3 +243,67 @@ def test_e2e_audit_log_records_actor_and_action(e2e):
     restart_entry = next(e for e in entries if e["action"] == "restart_service")
     assert restart_entry["ok"] is False
     assert restart_entry["error_kind"] == "approval_required"
+# ---- 複数ノード一括操作 ----
+
+
+def test_e2e_get_status_all(e2e):
+    """完了条件: 複数ノードを一括でシステム情報取得し、ノードごとに集約される。"""
+    data = call(e2e, "get_status_all", {})
+    assert data["ok"] is True
+    assert data["summary"]["total"] == 2   # dev-web-01 + dev-db-01
+    assert data["summary"]["ok"] == 2
+    assert "dev-web-01" in data["results"]
+    assert "dev-db-01" in data["results"]
+    assert data["results"]["dev-web-01"]["ok"] is True
+
+
+def test_e2e_get_status_all_selected_servers(e2e):
+    """完了条件: servers 指定で対象ノードが絞り込まれる。"""
+    data = call(e2e, "get_status_all", {"servers": ["dev-web-01"]})
+    assert data["summary"]["total"] == 1
+    assert "dev-web-01" in data["results"]
+    assert "dev-db-01" not in data["results"]
+
+
+def test_e2e_get_service_status_all(e2e):
+    """完了条件: 複数ノードのサービス状態を一括取得できる。"""
+    data = call(e2e, "get_service_status_all", {"service": "nginx"})
+    assert data["summary"]["total"] == 2
+    assert data["results"]["dev-web-01"]["ok"] is True
+    assert data["results"]["dev-web-01"]["data"]["service"] == "nginx"
+
+
+def test_e2e_get_service_status_all_missing_service(e2e):
+    """完了条件: service 未指定は missing_service エラー。"""
+    data = call(e2e, "get_service_status_all", {})
+    assert data["ok"] is False
+    assert data["error_kind"] == "missing_service"
+
+
+def test_e2e_restart_service_all_requires_approval(e2e):
+    """完了条件: approval_id なしの一括再起動は、各ノードで approval_required が返る。"""
+    data = call(e2e, "restart_service_all", {"service": "nginx"})
+    assert data["summary"]["total"] == 2
+    assert data["summary"]["ok"] == 0
+    assert data["summary"]["failed"] == 2
+    for sid in ("dev-web-01", "dev-db-01"):
+        res = data["results"][sid]
+        assert res["ok"] is False
+        assert res["error_kind"] in ("approval_required", "no_token")
+
+
+def test_e2e_restart_service_all_with_approval(e2e):
+    """完了条件: ノードごとの approval_id を渡すと一括再起動が実行される (dev-web-01 のみ operator トークンあり)。"""
+    # dev-web-01 向け承認要求 → 承認
+    req = call(e2e, "request_restart_approval", {"server": "dev-web-01", "service": "nginx"})
+    approval_id = req["data"]["id"]
+    e2e.approvals.approve(approval_id, approver="運用者", ttl_minutes=15)
+
+
+
+
+    data = call(e2e, "restart_service_all", {"service": "nginx", "approval_id": f"dev-web-01={approval_id}"})
+    assert data["results"]["dev-web-01"]["ok"] is True
+    assert data["results"]["dev-web-01"]["data"]["success"] is True
+    # dev-db-01 は operator トークンが無いため no_token
+    assert data["results"]["dev-db-01"]["ok"] is False

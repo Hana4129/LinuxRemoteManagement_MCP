@@ -22,6 +22,7 @@ type GlobalPolicy struct {
 	Services      []string
 	AllowedPaths  []string
 	DeniedPaths   []string
+	WritePaths    []string
 	MaxFileSizeMB int
 }
 
@@ -174,4 +175,32 @@ func (e *Engine) CanRunCommand(tokenID, command string) (bool, string) {
 		return false, "command not in global allowlist"
 	}
 	return false, "no command allowlist configured"
+}
+
+// CanWriteFile authorizes writing to path. Writing is destructive, so it
+// requires the operator scope and an explicit write_paths allowlist
+// (deny by default). Global DeniedPaths always take precedence.
+func (e *Engine) CanWriteFile(tokenID, path string) (bool, string) {
+	tok := e.byToken[tokenID]
+	if tok == nil || tok.Disabled {
+		return false, "unknown or disabled token"
+	}
+	if tok.Scope != ScopeOperator {
+		return false, "operator scope required"
+	}
+	clean := cleanPath(path)
+	for _, p := range e.global.DeniedPaths {
+		if strings.HasPrefix(clean, cleanPath(p)) {
+			return false, "path is denied: " + p
+		}
+	}
+	if len(e.global.WritePaths) == 0 {
+		return false, "no write path allowlist configured"
+	}
+	for _, p := range e.global.WritePaths {
+		if strings.HasPrefix(clean, cleanPath(p)) {
+			return true, ""
+		}
+	}
+	return false, "path not in write allowlist"
 }

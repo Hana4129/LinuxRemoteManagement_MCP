@@ -19,6 +19,9 @@ agent:
   timeout_seconds: 5
   tls_verify: false        # 自己署名証明書の開発環境では false にする
   user_agent: linux-mcp-server/0.1
+  # mTLS: Agent 側でクライアント証明書検証を有効にする場合に設定する
+  # client_cert: ./data/client.crt
+  # client_key: ./data/client.key
 
 # ---- 管理対象ノード ----
 servers:

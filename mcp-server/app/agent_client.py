@@ -68,9 +68,16 @@ class AgentClient:
     def __init__(self, config: Any, store: TokenStore):
         self._config = config
         self._store = store
+        # mTLS: client_cert/client_key が設定されていればクライアント証明書を提示する
+        client_cert = getattr(config.agent, "client_cert", "") or ""
+        client_key = getattr(config.agent, "client_key", "") or ""
+        cert = None
+        if client_cert and client_key:
+            cert = (client_cert, client_key)
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(config.agent.timeout_seconds),
             verify=config.agent.tls_verify,
+            cert=cert,
             headers={"User-Agent": config.agent.user_agent, "Accept": "application/json"},
         )
 

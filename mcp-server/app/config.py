@@ -34,6 +34,9 @@ class AgentConfig:
     timeout_seconds: float = 5.0
     tls_verify: bool = True
     user_agent: str = "linux-mcp-server/0.1"
+    # mTLS: クライアント証明書 (MCP Server 側)。client_key と対で指定する。
+    client_cert: str = ""
+    client_key: str = ""
 
 
 @dataclass(frozen=True)
@@ -48,6 +51,7 @@ class ConsoleConfig:
     require_approval: bool = True
     approval_ttl_minutes: int = 15
     mcp_audit: bool = True
+    max_parallel_nodes: int = 5
 
 
 @dataclass(frozen=True)
@@ -113,6 +117,7 @@ def _console_from_raw(raw: dict[str, Any], agent_user: str, agent_pass: str) -> 
         require_approval=bool(raw.get("require_approval", True)),
         approval_ttl_minutes=int(raw.get("approval_ttl_minutes", 15)),
         mcp_audit=bool(raw.get("mcp_audit", True)),
+        max_parallel_nodes=max(1, int(raw.get("max_parallel_nodes", 5))),
     )
 
 
@@ -143,6 +148,8 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         timeout_seconds=float(agent_raw.get("timeout_seconds", 5.0)),
         tls_verify=bool(agent_raw.get("tls_verify", True)),
         user_agent=str(agent_raw.get("user_agent", "linux-mcp-server/0.1")),
+        client_cert=str(agent_raw.get("client_cert", "")),
+        client_key=str(agent_raw.get("client_key", "")),
     )
 
     console = _console_from_raw(

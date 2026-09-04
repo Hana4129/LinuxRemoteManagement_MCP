@@ -10,6 +10,9 @@ agent:
     auto_tls: true
     auto_cert_file: ./data/server.crt
     auto_key_file: ./data/server.key
+    # mTLS: クライアント証明書の検証用 CA (MCP Server 側で発行した CA 証明書)。
+    # 設定すると、クライアント証明書の提示と検証が必須になる。
+    # client_ca_file: ./data/client-ca.crt
 
   tokens:
     - id: "token-001"
@@ -49,12 +52,19 @@ agent:
     denied_paths:
       - /etc/shadow
       - /etc/sudoers
+    # 書き込み許可パス (operator スコープのみ・deny by default)
+    write_paths:
+      - /var/tmp/
+      - /opt/app/config/
     max_file_size_mb: 10
 
   rate_limit:
     enabled: true
     per_minute: 60
     burst: 10
+
+  execution:
+    command_timeout_seconds: 30
 
   audit:
     enabled: true

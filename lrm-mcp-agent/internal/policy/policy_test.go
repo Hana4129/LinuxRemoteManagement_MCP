@@ -84,3 +84,62 @@ func TestCanRunCommand(t *testing.T) {
 		t.Error("deny by default: arbitrary command must be denied")
 	}
 }
+
+func newWriteTestEngine() *Engine {
+	global := GlobalPolicy{
+		WritePaths:  []string{"/var/tmp/", "/opt/app/config/"},
+		DeniedPaths: []string{"/etc/shadow"},
+	}
+	e := NewEngine(global)
+	e.AddToken(TokenPolicy{ID: "ro", Name: "readonly", Scope: ScopeReadonly})
+	e.AddToken(TokenPolicy{ID: "op", Name: "operator", Scope: ScopeOperator})
+	e.AddToken(TokenPolicy{ID: "off", Name: "disabled", Scope: ScopeOperator, Disabled: true})
+	return e
+}
+
+func TestCanWriteFile(t *testing.T) {
+	e := newWriteTestEngine()
+
+	// operator は write_paths 配下に書ける
+	if ok, _ := e.CanWriteFile("op", "/var/tmp/test.txt"); !ok {
+		t.Error("operator should write inside write_paths")
+	}
+	// readonly は書けない
+	if ok, _ := e.CanWriteFile("ro", "/var/tmp/test.txt"); ok {
+		t.Error("readonly token must not write files")
+	}
+	// disabled トークンは書けない
+	if ok, _ := e.CanWriteFile("off", "/var/tmp/test.txt"); ok {
+		t.Error("disabled token must be denied")
+	}
+	// write_paths 外は拒否
+	if ok, _ := e.CanWriteFile("op", "/etc/passwd"); ok {
+		t.Error("path outside write_paths must be denied")
+	}
+	// denied_paths は write_paths 内でも優先して拒否される
+}
+
+func TestCanWriteFile_DenyByDefault(t *testing.T) {
+	// write_paths 未設定ならすべて拒否
+	e := NewEngine(GlobalPolicy{})
+	e.AddToken(TokenPolicy{ID: "op", Name: "operator", Scope: ScopeOperator})
+	if ok, _ := e.CanWriteFile("op", "/var/tmp/test.txt"); ok {
+		t.Error("deny by default: no write_paths configured must deny")
+	}
+}
+
+func TestCanWriteFile_DeniedPathsPrecedence(t *testing.T) {
+	// denied_paths は write_paths 内のパスでも優先して拒否
+	e := NewEngine(GlobalPolicy{
+		WritePaths:  []string{"/etc/"},
+		DeniedPaths: []string{"/etc/shadow"},
+	})
+	e.AddToken(TokenPolicy{ID: "op", Name: "operator", Scope: ScopeOperator})
+	if ok, _ := e.CanWriteFile("op", "/etc/nginx/nginx.conf"); !ok {
+		t.Error("write_paths inside should be writable")
+	}
+	if ok, _ := e.CanWriteFile("op", "/etc/shadow"); ok {
+		t.Error("denied_paths must be denied even inside write_paths")
+	}
+}
+
