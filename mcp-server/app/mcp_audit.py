@@ -44,11 +44,21 @@ def sanitize_params(params: dict[str, Any] | None) -> dict[str, str]:
 
 
 class McpAudit:
-    """JSONL 監査ログライタ。"""
+    """JSONL 監査ログライタ（ローテーション対応）。"""
 
-    def __init__(self, path: str | Path, enabled: bool = True):
+    def __init__(
+        self,
+        path: str | Path,
+        enabled: bool = True,
+        max_size_mb: int = 10,
+        max_backups: int = 5,
+        compress: bool = True,
+    ):
         self.path = Path(path)
         self.enabled = enabled
+        self.max_size_mb = max_size_mb
+        self.max_backups = max_backups
+        self.compress = compress
         self._lock = threading.Lock()
         self._fh = None
         if self.enabled:
@@ -92,6 +102,74 @@ class McpAudit:
                 self._fh.flush()
         except OSError:
             pass
+
+    def _rotate_if_needed(self) -> None:
+        """ファイルサイズが上限を超えていたらローテーションする。"""
+
+        if self.max_size_mb <= 0:
+            return
+        try:
+            size = self.path.stat().st_size
+        except OSError:
+            return
+        max_bytes = self.max_size_mb * 1024 * 1024
+        if size < max_bytes:
+            return
+        self._rotate()
+
+    def _rotate(self) -> None:
+        """ログローテーションを実行する。"""
+
+        import gzip
+        # Close current file
+        if self._fh is not None:
+            try:
+                self._fh.close()
+            except OSError:
+                pass
+        # Rotate existing backups (from oldest to newest)
+        for i in range(self.max_backups - 1, -1, -1):
+            if i == 0:
+                old_path = str(self.path)
+            else:
+                old_path = f"{self.path}.{i}"
+                if self.compress:
+                    old_path += ".gz"
+            new_path = f"{self.path}.{i + 1}"
+            if self.compress:
+                new_path += ".gz"
+            if Path(old_path).exists():
+                if i == self.max_backups - 1:
+                    # Delete oldest
+                    try:
+                        os.remove(old_path)
+                    except OSError:
+                        pass
+                else:
+                    try:
+                        os.rename(old_path, new_path)
+                    except OSError:
+                        pass
+        # Compress the rotated file
+        if self.compress:
+            compressed = f"{self.path}.1.gz"
+            try:
+                with open(str(self.path), "rb") as f_in:
+                    with gzip.open(compressed, "wb") as f_out:
+                        import shutil
+                        shutil.copyfileobj(f_in, f_out)
+                os.remove(str(self.path))
+            except OSError:
+                pass
+        # Reopen the log file
+        try:
+            self._fh = open(self.path, "a", encoding="utf-8")
+            try:
+                os.chmod(self.path, 0o600)
+            except OSError:
+                pass
+        except OSError:
+            self._fh = None
 
     def read_entries(self, limit: int = 1000) -> list[dict]:
         """テスト/確認用: 書き込まれたエントリを読み出す。"""

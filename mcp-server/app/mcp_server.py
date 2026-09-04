@@ -447,4 +447,36 @@ def build_mcp(
 
         return await _gather_results("restart_service_all", ids, _call)
 
+    @mcp.tool
+    async def execute_command(server: str, command: str) -> dict:
+        """指定サーバーでコマンドを実行する (allowlistで制限)。
+
+        operator スコープのトークンが必要。
+        実行はAgent側のcommand allowlistで制限される。
+        タイムアウトはAgent側で設定された秒数。
+        """
+
+        async def _call() -> dict:
+            target = _server(server)
+            async with AgentClient(config, store) as agent:
+                return _payload(await agent.execute_command(target, command))
+
+        return await _run("execute_command", server, {"command": command}, _call)
+
+    @mcp.tool
+    async def write_file(server: str, path: str, content: str) -> dict:
+        """指定サーバーにファイルを書き込む (write_paths allowlistで制限)。
+
+        operator スコープのトークンが必要。
+        実行はAgent側のwrite_paths allowlistで制限される。
+        既存ファイルは自動的にバックアップされる (.bak)。
+        """
+
+        async def _call() -> dict:
+            target = _server(server)
+            async with AgentClient(config, store) as agent:
+                return _payload(await agent.write_file(target, path, content))
+
+        return await _run("write_file", server, {"path": path}, _call)
+
     return mcp

@@ -52,6 +52,11 @@ class ConsoleConfig:
     approval_ttl_minutes: int = 15
     mcp_audit: bool = True
     max_parallel_nodes: int = 5
+    rate_limit_per_minute: int = 60
+    rate_limit_burst: int = 10
+    audit_max_size_mb: int = 10
+    audit_max_backups: int = 5
+    audit_compress: bool = True
 
 
 @dataclass(frozen=True)
@@ -118,6 +123,11 @@ def _console_from_raw(raw: dict[str, Any], agent_user: str, agent_pass: str) -> 
         approval_ttl_minutes=int(raw.get("approval_ttl_minutes", 15)),
         mcp_audit=bool(raw.get("mcp_audit", True)),
         max_parallel_nodes=max(1, int(raw.get("max_parallel_nodes", 5))),
+        rate_limit_per_minute=max(0, int(raw.get("rate_limit_per_minute", 60))),
+        rate_limit_burst=max(0, int(raw.get("rate_limit_burst", 10))),
+        audit_max_size_mb=max(0, int(raw.get("audit_max_size_mb", 10))),
+        audit_max_backups=max(0, int(raw.get("audit_max_backups", 5))),
+        audit_compress=bool(raw.get("audit_compress", True)),
     )
 
 

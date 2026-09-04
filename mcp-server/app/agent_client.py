@@ -192,3 +192,9 @@ class AgentClient:
     async def read_file(self, server: ServerConfig, path: str) -> AgentResult:
         return await self.request(server, "GET", "/v1/files", params={"path": path})
 
+    async def execute_command(self, server: ServerConfig, command: str) -> AgentResult:
+        return await self.request(server, "POST", "/v1/execute", scope="operator", json_body={"command": command})
+
+    async def write_file(self, server: ServerConfig, path: str, content: str) -> AgentResult:
+        return await self.request(server, "POST", "/v1/files", scope="operator", json_body={"path": path, "content": content})
+

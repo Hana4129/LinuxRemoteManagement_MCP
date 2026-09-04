@@ -1142,6 +1142,8 @@ get_service_status
 restart_service
 get_service_logs
 read_file
+execute_command
+write_file
 ```
 
 認証：
@@ -1169,7 +1171,14 @@ Tailscale / WireGuard
 ログ：
 
 ```text
-JSON Audit Log
+JSON Audit Log (ローテーション対応)
+```
+
+セキュリティ：
+
+```text
+Rate Limit (トークンバケット)
+Human Approval
 ```
 
 この構成でまず実用化し、その後、
@@ -1177,7 +1186,6 @@ JSON Audit Log
 ```text
 mTLS
 Token Rotation
-Human Approval
 Policy Engine
 SIEM
 ```

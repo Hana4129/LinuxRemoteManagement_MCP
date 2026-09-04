@@ -1,4 +1,4 @@
-""""""""""""管理コンソール HTTP API。
+"""管理コンソール HTTP API。
 
 - GET  /api/meta            アプリ/サーバー/スコープのメタ
 - GET  /api/nodes            ノード一覧 (インストール状況/OS/稼働時間を判定済み)
@@ -13,7 +13,7 @@
 - POST /api/tokens/{id}/revoke  失効
 - DEL  /api/tokens/{id}       削除
 - POST /api/tokens/cleanup-grace-periods  グラ期間経過トークン一括無効化
-""""""""""""
+"""
 
 from __future__ import annotations
 

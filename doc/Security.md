@@ -106,9 +106,11 @@ SIEM
 - ✅ mTLS: Agent 側でクライアント証明書検証対応済み（config.yml で設定）
 - ✅ Restricted sudo: systemd `NoNewPrivileges=true`、`ProtectSystem=strict`
 - ✅ Audit Log: 構造化 JSONL、0600 パーミッション、ハッシュチェーンによる改ざん防止
+- ✅ Audit Log Rotation: サイズベースローテーション、世代管理、gzip 圧縮対応
 - ✅ SIEM 連合: Webhook によるリアルタイム転送対応（CEF/LEEF/JSON 形式対応）
 - ✅ Token rotation: API によるローテーション対応（グラ期間、履歴管理）
 - ✅ Immutable audit log: ハッシュチェーン実装済み、append-only マウントは運用時設定
+- ✅ Rate Limit (MCP Server): トークンバケット方式、クライアントIP単位、429応答
 
 ---
 
@@ -122,7 +124,9 @@ SIEM
 | Command Allowlist | - | ✅ | ✅ | ✅ 実装済み |
 | Dedicated User | - | ✅ | ✅ | ✅ 実装済み |
 | Audit Log | - | ✅ | ✅ | ✅ 実装済み |
-| Rate Limit | - | ✅ | ✅ | ✅ 実装済み |
+| Audit Log Rotation | - | ✅ | ✅ | ✅ 実装済み |
+| Rate Limit (Agent) | - | ✅ | ✅ | ✅ 実装済み |
+| Rate Limit (MCP Server) | - | ✅ | ✅ | ✅ 実装済み |
 | Human Approval | - | ✅ | ✅ | ✅ 実装済み |
 | Policy Engine | - | - | ✅ | ✅ 実装済み |
 | mTLS | - | - | ✅ | ✅ 実装済み |

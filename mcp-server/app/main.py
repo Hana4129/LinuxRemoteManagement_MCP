@@ -19,6 +19,7 @@ from .approvals import ApprovalStore
 from .config import AppConfig, load_config
 from .db import TokenStore
 from .mcp_audit import McpAudit
+from .mcp_ratelimit import RateLimiter
 
 logger = logging.getLogger("linux_mcp")
 
@@ -83,10 +84,36 @@ def _maybe_audit(config: AppConfig) -> McpAudit | None:
     if not config.console.mcp_audit:
         return None
     try:
-        return McpAudit(config.data_dir / "mcp_audit.log")
+        return McpAudit(
+            config.data_dir / "mcp_audit.log",
+            max_size_mb=config.console.audit_max_size_mb,
+            max_backups=config.console.audit_max_backups,
+            compress=config.console.audit_compress,
+        )
     except Exception as exc:  # noqa: BLE001
         logger.warning("McpAudit 初期化に失敗 (監査ログを無効化): %s", exc)
         return None
+
+
+def _maybe_rate_limit(app: FastAPI, config: AppConfig) -> None:
+    """Add rate limiting middleware if enabled."""
+
+    per_minute = config.console.rate_limit_per_minute
+    burst = config.console.rate_limit_burst
+    if per_minute <= 0 or burst <= 0:
+        return
+    limiter = RateLimiter(per_minute=per_minute, burst=burst)
+
+    @app.middleware("http")
+    async def _rate_limit(request: Request, call_next):
+        client_ip = request.client.host if request.client else "unknown"
+        if not limiter.allow(client_ip):
+            return Response(
+                status_code=429,
+                content="429 Too Many Requests",
+                headers={"Retry-After": "60"},
+            )
+        return await call_next(request)
 
 
 def create_app(config: AppConfig | None = None, store: TokenStore | None = None) -> FastAPI:
@@ -133,6 +160,7 @@ def create_app(config: AppConfig | None = None, store: TokenStore | None = None)
 
     app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
     _maybe_basic_auth(app, config)
+    _maybe_rate_limit(app, config)
     _mount_mcp_http(app, config, store, approvals=approvals, audit=audit)
 
     logger.info(

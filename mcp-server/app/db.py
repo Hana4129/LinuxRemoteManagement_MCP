@@ -269,23 +269,24 @@ class TokenStore:
             query = "SELECT * FROM tokens WHERE enabled = 1"
             clauses: list[str] = []
             params: list[Any] = []
-            star_pattern = '%"*"%'
-            id_pattern = '%"' + str(server_id) + '"%'
-            clauses.append("(server_ids LIKE ? OR server_ids LIKE ?)")
-            params.append(star_pattern)
-            params.append(id_pattern)
             if scope is not None:
                 clauses.append("scope = ?")
                 params.append(scope)
             if clauses:
                 query += " AND " + " AND ".join(clauses)
-            query += " ORDER BY created_at DESC LIMIT 1"
-            row = conn.execute(query, params).fetchone()
-        if row is None:
-            return None
-        record = self._row_to_record(row)
-        record.token_raw = row["token_raw"]
-        return record
+            query += " ORDER BY created_at DESC"
+            rows = conn.execute(query, params).fetchall()
+        # JSONをパーサーして正確にserver_idが一致するものを探す
+        for row in rows:
+            try:
+                server_ids = json.loads(row["server_ids"])
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if server_id in server_ids or "*" in server_ids:
+                record = self._row_to_record(row)
+                record.token_raw = row["token_raw"]
+                return record
+        return None
 
     def rotate_token(
         self,

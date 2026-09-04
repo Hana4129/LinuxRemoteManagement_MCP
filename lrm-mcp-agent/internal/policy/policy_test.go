@@ -143,3 +143,46 @@ func TestCanWriteFile_DeniedPathsPrecedence(t *testing.T) {
 	}
 }
 
+func TestIsSubpath(t *testing.T) {
+	// isSubpath のテスト: 部分一致による誤検知を防ぐ
+	tests := []struct {
+		child  string
+		parent string
+		want   bool
+	}{
+		{"/var/log/nginx.log", "/var/log", true},
+		{"/var/log", "/var/log", true},
+		{"/var/logistics/nginx.log", "/var/log", false}, // 部分一致はfalse
+		{"/var/log", "/var/logistics", false},
+		{"/etc/nginx/nginx.conf", "/etc/", true},
+		{"/etc/shadow", "/etc/", true},
+		{"/home/user/.ssh/id_rsa", "/etc/", false},
+	}
+	for _, tt := range tests {
+		got := isSubpath(tt.child, tt.parent)
+		if got != tt.want {
+			t.Errorf("isSubpath(%q, %q) = %v, want %v", tt.child, tt.parent, got, tt.want)
+		}
+	}
+}
+
+func TestCanReadFile_NoPartialMatch(t *testing.T) {
+	// 部分一致による誤検知を防ぐテスト
+	e := NewEngine(GlobalPolicy{
+		AllowedPaths: []string{"/var/log"},
+	})
+	e.AddToken(TokenPolicy{ID: "ro", Name: "readonly", Scope: ScopeReadonly})
+	// /var/log は許可
+	if ok, _ := e.CanReadFile("ro", "/var/log/syslog"); !ok {
+		t.Error("/var/log/syslog should be readable")
+	}
+	// /var/logistics は /var/log の部分一致だが、別ディレクトリなので拒否
+	if ok, _ := e.CanReadFile("ro", "/var/logistics/nginx.log"); ok {
+		t.Error("/var/logistics/nginx.log should NOT be readable (partial match)")
+	}
+	// /var/log 自体は許可
+	if ok, _ := e.CanReadFile("ro", "/var/log"); !ok {
+		t.Error("/var/log itself should be readable")
+	}
+}
+

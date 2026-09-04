@@ -79,3 +79,13 @@ def test_touch_last_used(store: TokenStore):
     assert record.last_used_at is None
     store.touch_last_used(record.id)
     assert store.get_token(record.id).last_used_at is not None
+
+
+def test_find_token_no_partial_match(store: TokenStore):
+    """サーバーIDの部分一致で誤ってトークンが返されないことを確認する。"""
+    store.create_token(name="web01", server_ids=["dev-web-01"], scope="readonly")
+    # "dev-web-01" の部分一致で "dev-web-010" や "dev-web-011" が返されないこと
+    assert store.find_token_for_server("dev-web-010", scope="readonly") is None
+    assert store.find_token_for_server("dev-web-011", scope="readonly") is None
+    # 正しいIDでは返ること
+    assert store.find_token_for_server("dev-web-01", scope="readonly") is not None

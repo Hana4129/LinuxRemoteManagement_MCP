@@ -68,14 +68,14 @@ func (e *Engine) CanReadFile(tokenID, path string) (bool, string) {
 	}
 	clean := cleanPath(path)
 	for _, p := range e.global.DeniedPaths {
-		if strings.HasPrefix(clean, cleanPath(p)) {
+		if isSubpath(clean, cleanPath(p)) {
 			return false, "path is denied: " + p
 		}
 	}
 	// token-specific file allowlist takes precedence
 	if len(tok.Files) > 0 {
 		for _, p := range tok.Files {
-			if strings.HasPrefix(clean, cleanPath(p)) {
+			if isSubpath(clean, cleanPath(p)) {
 				return true, ""
 			}
 		}
@@ -84,7 +84,7 @@ func (e *Engine) CanReadFile(tokenID, path string) (bool, string) {
 	// fall back to global allowlist
 	if len(e.global.AllowedPaths) > 0 {
 		for _, p := range e.global.AllowedPaths {
-			if strings.HasPrefix(clean, cleanPath(p)) {
+			if isSubpath(clean, cleanPath(p)) {
 				return true, ""
 			}
 		}
@@ -92,6 +92,20 @@ func (e *Engine) CanReadFile(tokenID, path string) (bool, string) {
 	}
 	// no allowlist configured → deny by default
 	return false, "no path allowlist configured"
+}
+
+// isSubpath returns true if child is a subdirectory (or the same directory) of parent.
+// This prevents false positives like /var/logistics matching /var/log.
+func isSubpath(child, parent string) bool {
+	if child == parent {
+		return true
+	}
+	// Ensure parent ends with / for proper prefix matching
+	parentPrefix := parent
+	if !strings.HasSuffix(parentPrefix, "/") {
+		parentPrefix += "/"
+	}
+	return strings.HasPrefix(child, parentPrefix)
 }
 
 func (e *Engine) CanReadService(tokenID, service string) (bool, string) {
@@ -190,7 +204,7 @@ func (e *Engine) CanWriteFile(tokenID, path string) (bool, string) {
 	}
 	clean := cleanPath(path)
 	for _, p := range e.global.DeniedPaths {
-		if strings.HasPrefix(clean, cleanPath(p)) {
+		if isSubpath(clean, cleanPath(p)) {
 			return false, "path is denied: " + p
 		}
 	}
@@ -198,7 +212,7 @@ func (e *Engine) CanWriteFile(tokenID, path string) (bool, string) {
 		return false, "no write path allowlist configured"
 	}
 	for _, p := range e.global.WritePaths {
-		if strings.HasPrefix(clean, cleanPath(p)) {
+		if isSubpath(clean, cleanPath(p)) {
 			return true, ""
 		}
 	}
