@@ -124,16 +124,22 @@ async def main() -> int:
             traceback.print_exc()
             results.append(("processes", False, str(exc)))
 
-        # 5) /v1/files?path= (許可パス)
+        # 5) /v1/files?path= (許可期待パス)
+        #    Agent側トークンの files 許可リストに含まれないパスは 403 (policy正しい挙動) → WARN
         allowed_paths = ["/etc/os-release", "/etc/hostname", "/etc/nginx/nginx.conf"]
         for path in allowed_paths:
-            print(f"\n[5] GET /v1/files?path={path} (許可パス)")
+            print(f"\n[5] GET /v1/files?path={path} (許可期待パス)")
             try:
                 r = await agent.read_file(server, path)
                 if r.ok:
                     print(f"  OK  (latency={r.latency_ms}ms)")
-                    print(f"    response: {r.data}")
+                    content = (r.data or {}).get("content", "")
+                    print(f"    content: {content[:60]!r}...")
                     results.append((f"files:{path}", True, f"{r.latency_ms}ms"))
+                elif r.error_kind == "auth":
+                    print(f"  WARN (latency={r.latency_ms}ms) — Agent側トークンのfiles許可リストに含まれず拒否 (policyとしては正しい)")
+                    print(f"    Agent応答: {r.error}")
+                    results.append((f"files:{path}", True, "WARN: token allowlistで拒否"))
                 else:
                     print(f"  FAIL (kind={r.error_kind}): {r.error}")
                     results.append((f"files:{path}", False, r.error or r.error_kind or "unknown"))
@@ -141,6 +147,36 @@ async def main() -> int:
                 print(f"  EXCEPTION: {exc}")
                 traceback.print_exc()
                 results.append((f"files:{path}", False, str(exc)))
+
+        # 5b) POST /v1/execute (readonly トークンでAgentに直接 → 拒否されること)
+        print("\n[5b] POST /v1/execute (readonly トークン → 拒否期待)")
+        try:
+            r = await agent.request(server, "POST", "/v1/execute", json_body={"command": "true"})
+            if r.ok:
+                print("  想定外OK — セキュリティ警告！readonlyでコマンド実行できた")
+                results.append(("execute_denied", False, "should be rejected"))
+            else:
+                print(f"  正しく拒否 (kind={r.error_kind})")
+                results.append(("execute_denied", True, f"{r.error_kind}"))
+        except Exception as exc:
+            print(f"  EXCEPTION: {exc}")
+            results.append(("execute_denied", False, str(exc)))
+
+        # 5c) POST /v1/files (書き込み, readonly トークンでAgentに直接 → 拒否されること)
+        print("\n[5c] POST /v1/files (書き込み, readonly トークン → 拒否期待)")
+        try:
+            r = await agent.request(
+                server, "POST", "/v1/files", params={"path": "/var/tmp/lrm-probe.txt"}, json_body={"content": "probe"}
+            )
+            if r.ok:
+                print("  想定外OK — セキュリティ警告！readonlyで書き込めた")
+                results.append(("write_denied", False, "should be rejected"))
+            else:
+                print(f"  正しく拒否 (kind={r.error_kind})")
+                results.append(("write_denied", True, f"{r.error_kind}"))
+        except Exception as exc:
+            print(f"  EXCEPTION: {exc}")
+            results.append(("write_denied", False, str(exc)))
 
         # 6) /v1/files?path= (拒否パス)
         denied_paths = ["/etc/shadow", "/etc/passwd", "/root/.ssh/id_rsa"]

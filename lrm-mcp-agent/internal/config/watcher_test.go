@@ -115,8 +115,6 @@ func TestWatcher_RollbackOnInvalidConfig(t *testing.T) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	_ = mu // avoid unused variable in some code paths
-	t.Log("reload attempts:", reloaded)
 	t.Fatal("config was not rolled back to a valid state within deadline")
 }
 

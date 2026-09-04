@@ -99,6 +99,22 @@ func TestAuthenticate_ValidToken(t *testing.T) {
 }
 
 func TestAuthenticate_InvalidToken(t *testing.T) {
+	agent := newTestAgent()
+	defer agent.Shutdown()
+
+	req := httptest.NewRequest("GET", "/v1/system", nil)
+	req.Header.Set("Authorization", "Bearer invalid-secret")
+
+	handler := agent.Handler()
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 for invalid token, got %d", rr.Code)
+	}
+}
+
 func TestHandleSystem_Readonly(t *testing.T) {
 	agent := newTestAgent()
 	defer agent.Shutdown()
@@ -212,22 +228,6 @@ func TestPolicyEngine_Integration(t *testing.T) {
 
 	if len(agent.tokens) != 2 {
 		t.Errorf("expected 2 tokens, got %d", len(agent.tokens))
-	}
-}
-
-	agent := newTestAgent()
-	defer agent.Shutdown()
-
-	req := httptest.NewRequest("GET", "/v1/system", nil)
-	req.Header.Set("Authorization", "Bearer invalid-token")
-
-	handler := agent.Handler()
-	rr := httptest.NewRecorder()
-
-	handler.ServeHTTP(rr, req)
-
-	if rr.Code != http.StatusUnauthorized {
-		t.Errorf("expected 401 for invalid token, got %d", rr.Code)
 	}
 }
 

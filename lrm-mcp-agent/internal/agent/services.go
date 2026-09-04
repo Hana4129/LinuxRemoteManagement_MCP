@@ -2,6 +2,7 @@ package agent
 
 import (
 	"os/exec"
+	"strconv"
 	"strings"
 )
 
@@ -46,19 +47,26 @@ func restartService(service string) restartResult {
 	return restartResult{Success: true, Service: service, Status: "running"}
 }
 
-func getServiceLogs(service string) serviceLogs {
-	out, err := exec.Command("journalctl", "-u", service, "-n", "100", "--no-pager", "-o", "cat").Output()
+func getServiceLogs(service string, lines int) serviceLogs {
+	// OpenAPI 契約: lines は 1〜1000 (既定 100)
+	if lines <= 0 {
+		lines = 100
+	}
+	if lines > 1000 {
+		lines = 1000
+	}
+	out, err := exec.Command("journalctl", "-u", service, "-n", strconv.Itoa(lines), "--no-pager", "-o", "cat").Output()
 	if err != nil {
 		return serviceLogs{Service: service, Lines: []string{}, Total: 0, Truncated: false}
 	}
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-	if len(lines) == 1 && lines[0] == "" {
-		lines = []string{}
+	logLines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(logLines) == 1 && logLines[0] == "" {
+		logLines = []string{}
 	}
 	return serviceLogs{
 		Service:   service,
-		Lines:     lines,
-		Total:     len(lines),
-		Truncated: len(lines) >= 100,
+		Lines:     logLines,
+		Total:     len(logLines),
+		Truncated: len(logLines) >= lines,
 	}
 }

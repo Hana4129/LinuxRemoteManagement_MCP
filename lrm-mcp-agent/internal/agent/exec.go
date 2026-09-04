@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"log"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -22,14 +23,15 @@ func validateCommand(command string) string {
 	if strings.TrimSpace(command) == "" {
 		return "empty command"
 	}
+	// Block subshell substitution patterns first (more specific diagnosis
+	// before the generic metacharacter scan hits '$').
+	if strings.Contains(command, "$(") || strings.Contains(command, "${") {
+		return "command contains subshell substitution"
+	}
 	for _, ch := range shellMetachars {
 		if strings.ContainsRune(command, ch) {
 			return "command contains forbidden shell metacharacter: " + string(ch)
 		}
-	}
-	// Block subshell substitution patterns
-	if strings.Contains(command, "$(") || strings.Contains(command, "${") {
-		return "command contains subshell substitution"
 	}
 	return ""
 }
@@ -41,6 +43,16 @@ func sanitizeEnv() []string {
 		"HOME=/tmp",
 		"LANG=C.UTF-8",
 	}
+}
+
+// workingDir returns the directory commands run in: /tmp when available
+// (Linux production), otherwise the agent's working directory
+// (e.g. Windows development environments without /tmp).
+func workingDir() string {
+	if info, err := os.Stat("/tmp"); err == nil && info.IsDir() {
+		return "/tmp"
+	}
+	return ""
 }
 
 type execResult struct {
@@ -75,7 +87,7 @@ func executeCommandWithTimeout(command string, timeout time.Duration) execResult
 
 	start := time.Now()
 	cmd := exec.CommandContext(ctx, parts[0], parts[1:]...)
-	cmd.Dir = "/tmp"
+	cmd.Dir = workingDir()
 	cmd.Env = sanitizeEnv()
 	out, err := cmd.CombinedOutput()
 	duration := time.Since(start)

@@ -43,6 +43,10 @@ func NewWatcher(path string, interval time.Duration, onReload func(*Config)) (*W
 
 // Start begins polling the config file in a background goroutine.
 func (w *Watcher) Start() {
+	// 起動時の内容を初期バックアップとして保存する (最初の変更が不正でもロールバック可能にする)
+	if err := w.backup(); err != nil {
+		log.Printf("config watcher: initial backup failed: %v", err)
+	}
 	go w.loop()
 }
 
@@ -81,15 +85,10 @@ func (w *Watcher) check() {
 	w.lastMod = info.ModTime()
 	log.Printf("config watcher: change detected in %s, reloading", w.path)
 
-	// 変更前の設定をバックアップ (ロールバック用)
-	if err := w.backup(); err != nil {
-		log.Printf("config watcher: backup failed: %v", err)
-	}
-
 	// 新しい設定を読み込む
 	cfg, err := Load(w.path)
 	if err != nil {
-		// 読み込み失敗時はバックアップからロールバックする
+		// 読み込み失敗時は最後に正常だった内容 (バックアップ) からロールバックする
 		log.Printf("config watcher: reload failed: %v, rolling back", err)
 		if rbErr := w.rollback(); rbErr != nil {
 			log.Printf("config watcher: rollback failed: %v", rbErr)
@@ -98,6 +97,11 @@ func (w *Watcher) check() {
 			w.lastMod = info.ModTime()
 		}
 		return
+	}
+
+	// ロード成功後の内容をバックアップとして保存する (常に最後に正常な内容を保持)
+	if err := w.backup(); err != nil {
+		log.Printf("config watcher: backup failed: %v", err)
 	}
 
 	// コールバックで Agent 側の状態 (トークン・ポリシー等) を更新する

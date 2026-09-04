@@ -12,7 +12,7 @@ import argparse
 import platform
 import time
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 AGENT_VERSION = "0.1.0-mock"
@@ -113,6 +113,29 @@ def build_app(token=None, hostname=None, os_name=None, kernel=None, base_uptime=
         if path not in allowed:
             raise HTTPException(status_code=403, detail=f"path not allowed: {path}")
         return {"path": path, "content": allowed[path]}
+
+    @app.post("/v1/files")
+    def write_file(path: str = Query(...), payload: dict = Body(default={})):
+        # 実機Agentと同じ契約: path は query パラメータ、content は JSON ボディ
+        content = payload.get("content")
+        if not isinstance(content, str):
+            raise HTTPException(status_code=400, detail="content required")
+        return {"path": path, "backup": path + ".bak", "status": "written"}
+
+    @app.post("/v1/execute")
+    def execute(payload: dict = Body(default={})):
+        # 実機Agentと同じ契約: command は JSON ボディ、応答は execResult 形式
+        command = payload.get("command")
+        if not isinstance(command, str) or not command.strip():
+            raise HTTPException(status_code=400, detail="command required")
+        return {
+            "command": command,
+            "exit_code": 0,
+            "stdout": f"mock: {command}",
+            "stderr": "",
+            "duration": "1ms",
+            "timed_out": False,
+        }
 
     return app
 

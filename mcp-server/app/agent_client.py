@@ -167,7 +167,7 @@ class AgentClient:
                 pass
         return AgentResult.success(data=data, status_code=resp.status_code, latency_ms=latency)
 
-        # ---- endpoint wrappers ----
+    # ---- endpoint wrappers ----
     async def health(self, server: ServerConfig) -> AgentResult:
         return await self.request(server, "GET", "/v1/health")
 
@@ -196,5 +196,8 @@ class AgentClient:
         return await self.request(server, "POST", "/v1/execute", scope="operator", json_body={"command": command})
 
     async def write_file(self, server: ServerConfig, path: str, content: str) -> AgentResult:
-        return await self.request(server, "POST", "/v1/files", scope="operator", json_body={"path": path, "content": content})
+        # Agent API 契約 (openapi-agent.yml): path は query パラメータ、content は JSON ボディ
+        return await self.request(
+            server, "POST", "/v1/files", scope="operator", params={"path": path}, json_body={"content": content}
+        )
 

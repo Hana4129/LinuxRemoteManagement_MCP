@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -292,7 +293,14 @@ func (a *Agent) handleServiceLogs(w http.ResponseWriter, r *http.Request, servic
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": reason})
 		return
 	}
-	logs := getServiceLogs(service)
+	// OpenAPI 契約: lines クエリ (1〜1000, 既定 100)
+	lines := 100
+	if raw := r.URL.Query().Get("lines"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			lines = n
+		}
+	}
+	logs := getServiceLogs(service, lines)
 	a.auditLog.Log(currentToken(r).id, "service_logs", service, "ok", "", clientIP(r))
 	writeJSON(w, http.StatusOK, logs)
 }

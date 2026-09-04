@@ -38,7 +38,7 @@ func TestRestartService_Structure(t *testing.T) {
 
 func TestGetServiceLogs_Structure(t *testing.T) {
 	// systemd is not available in test environment
-	result := getServiceLogs("nginx")
+	result := getServiceLogs("nginx", 100)
 	if result.Service != "nginx" {
 		t.Errorf("expected service name 'nginx', got %q", result.Service)
 	}
@@ -49,7 +49,7 @@ func TestGetServiceLogs_Structure(t *testing.T) {
 }
 
 func TestGetServiceLogs_EmptyResult(t *testing.T) {
-	result := getServiceLogs("nonexistent-service-xyz")
+	result := getServiceLogs("nonexistent-service-xyz", 100)
 	if result.Service != "nonexistent-service-xyz" {
 		t.Errorf("expected service name 'nonexistent-service-xyz', got %q", result.Service)
 	}
