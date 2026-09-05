@@ -19,7 +19,8 @@ Linux Remote Management MCP の認証・認可分離に関する残作業をま�
 - 管理コンソールの同一origin CSRF検査
 - 管理コンソール静的アセットのバージョン付きキャッシュ制御
 - Basic認証アカウントをadmin principalとして扱う認証主体統一
-- Python テスト 94 件
+- 管理コンソールのMCP Bearerトークン認証 (principal紐付けトークンのRBAC強制・無効/未紐付けトークンの401拒否)
+- Python テスト 104 件
 
 ## 優先度 P0: 本番導入前に必要
 

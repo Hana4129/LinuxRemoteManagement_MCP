@@ -23,7 +23,7 @@ from .api import (
     servers_router,
     tokens_router,
 )
-from .auth import current_principal, reset_current_principal, set_current_principal
+from .auth import authenticate_raw_token, current_principal, reset_current_principal, set_current_principal
 from .approvals import ApprovalStore
 from .config import AppConfig, load_config
 from .db import TokenStore
@@ -73,6 +73,11 @@ def _maybe_basic_auth(app: FastAPI, config: AppConfig) -> None:
 
     @app.middleware("http")
     async def _basic_auth(request: Request, call_next):
+        # Bearerトークンの場合はMCPトークン認証 (_maybe_mcp_token_auth) に任せる
+        provided = request.headers.get("Authorization", "")
+        if provided.startswith("Bearer "):
+            return await call_next(request)
+
         if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
             origin = request.headers.get("Origin")
             if origin:
@@ -80,7 +85,6 @@ def _maybe_basic_auth(app: FastAPI, config: AppConfig) -> None:
                 request_origin = f"{request.url.scheme}://{request.url.netloc}"
                 if f"{origin_parts.scheme}://{origin_parts.netloc}" != request_origin:
                     return Response(status_code=403, content="Cross-origin mutation rejected")
-        provided = request.headers.get("Authorization", "")
         if not secrets.compare_digest(provided, expected):
             return Response(
                 status_code=401,
@@ -102,6 +106,39 @@ def _maybe_basic_auth(app: FastAPI, config: AppConfig) -> None:
             return await call_next(request)
         finally:
             reset_current_principal(principal_context)
+
+
+def _maybe_mcp_token_auth(app: FastAPI, config: AppConfig) -> None:
+    """MCP Bearer トークンを検証し、紐づく principal を設定するミドルウェア。
+
+    Basic/OIDC 認証ミドルウェアの内側で動作し、そこで処理されなかった
+    Bearer トークンを MCP credential として認証する。
+    無効なトークンや principal に紐づかないトークンは 401 で拒否する。
+    """
+
+    @app.middleware("http")
+    async def _mcp_token_auth(request: Request, call_next):
+        header = request.headers.get("Authorization", "")
+        if not header.startswith("Bearer "):
+            return await call_next(request)
+        if current_principal() is not None:
+            # Basic/OIDC ミドルウェアで認証済みのため何もしない
+            return await call_next(request)
+        store = getattr(request.app.state, "store", None)
+        if store is None:
+            return await call_next(request)
+        token = authenticate_raw_token(store, header[7:].strip())
+        if token is None or not token.principal_id:
+            return Response(status_code=401, content="Invalid or unlinked MCP token")
+        principal = store.get_principal(token.principal_id)
+        if principal is None:
+            return Response(status_code=401, content="Invalid or unlinked MCP token")
+        context = set_current_principal(principal)
+        try:
+            request.state.principal = principal
+            return await call_next(request)
+        finally:
+            reset_current_principal(context)
 
 
 def _maybe_approval_store(config: AppConfig) -> ApprovalStore | None:
@@ -184,6 +221,9 @@ def create_app(config: AppConfig | None = None, store: TokenStore | None = None)
         )
 
     app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
+    # MCP Bearer トークン認証は Basic/OIDC の内側 (最後に実行) で登録し、
+    # 未処理の Bearer トークンを引き取らせる
+    _maybe_mcp_token_auth(app, config)
     _maybe_basic_auth(app, config)
     _maybe_rate_limit(app, config)
 

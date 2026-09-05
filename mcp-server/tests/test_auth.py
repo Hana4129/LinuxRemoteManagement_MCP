@@ -113,6 +113,122 @@ def test_principal_permission_and_disable_revoke_access(tmp_path, store):
     assert store.get_by_raw(token["token"]) is not None
 
 
+def test_principal_viewer_cannot_create_principal(tmp_path, store):
+    """viewerロールのMCPトークンではprincipalを作成できない (403)"""
+    config = _config(tmp_path, username="admin", password="secret")
+    app = create_app(config, store=store)
+    admin_headers = {"Authorization": "Basic " + base64.b64encode(b"admin:secret").decode("ascii")}
+    with TestClient(app) as client:
+        principal = client.post(
+            "/api/principals",
+            json={"subject": "viewer-user", "display_name": "Viewer User", "role": "viewer"},
+            headers=admin_headers,
+        ).json()
+        token = client.post(
+            "/api/tokens",
+            json={
+                "name": "viewer-token",
+                "principal_id": principal["id"],
+                "server_ids": ["dev"],
+                "scope": "readonly",
+            },
+            headers=admin_headers,
+        ).json()
+        response = client.post(
+            "/api/principals",
+            json={"subject": "another-user", "display_name": "Another User", "role": "viewer"},
+            headers={"Authorization": f"Bearer {token['token']}"},
+        )
+        assert response.status_code == 403
+
+
+def test_principal_operator_cannot_create_principal(tmp_path, store):
+    """operatorロールのMCPトークンでもprincipalを作成できない (403)"""
+    config = _config(tmp_path, username="admin", password="secret")
+    app = create_app(config, store=store)
+    admin_headers = {"Authorization": "Basic " + base64.b64encode(b"admin:secret").decode("ascii")}
+    with TestClient(app) as client:
+        principal = client.post(
+            "/api/principals",
+            json={"subject": "operator-user", "display_name": "Operator User", "role": "operator"},
+            headers=admin_headers,
+        ).json()
+        token = client.post(
+            "/api/tokens",
+            json={
+                "name": "operator-token",
+                "principal_id": principal["id"],
+                "server_ids": ["dev"],
+                "scope": "operator",
+            },
+            headers=admin_headers,
+        ).json()
+        response = client.post(
+            "/api/principals",
+            json={"subject": "another-user", "display_name": "Another User", "role": "viewer"},
+            headers={"Authorization": f"Bearer {token['token']}"},
+        )
+        assert response.status_code == 403
+
+
+def test_principal_admin_token_can_create_principal(tmp_path, store):
+    """adminロールに紐づくMCPトークンならprincipalを作成できる (200)"""
+    config = _config(tmp_path, username="admin", password="secret")
+    app = create_app(config, store=store)
+    admin_headers = {"Authorization": "Basic " + base64.b64encode(b"admin:secret").decode("ascii")}
+    with TestClient(app) as client:
+        principal = client.post(
+            "/api/principals",
+            json={"subject": "admin-user", "display_name": "Admin User", "role": "admin"},
+            headers=admin_headers,
+        ).json()
+        token = client.post(
+            "/api/tokens",
+            json={
+                "name": "admin-token",
+                "principal_id": principal["id"],
+                "server_ids": ["dev"],
+                "scope": "operator",
+            },
+            headers=admin_headers,
+        ).json()
+        response = client.post(
+            "/api/principals",
+            json={"subject": "new-admin", "display_name": "New Admin", "role": "viewer"},
+            headers={"Authorization": f"Bearer {token['token']}"},
+        )
+        assert response.status_code == 200
+        assert response.json()["role"] == "viewer"
+
+
+def test_mcp_token_auth_sets_principal(tmp_path, store):
+    """MCPトークン認証: 無効トークンは401、principal紐づきトークンは認証される"""
+    config = _config(tmp_path, username="admin", password="secret")
+    app = create_app(config, store=store)
+    admin_headers = {"Authorization": "Basic " + base64.b64encode(b"admin:secret").decode("ascii")}
+    with TestClient(app) as client:
+        # 無効なトークンは401 (principal未設定のまま管理APIをバイパスできない)
+        assert client.get("/api/meta", headers={"Authorization": "Bearer invalid"}).status_code == 401
+        # principalに紐づく有効なトークンは認証される
+        principal = client.post(
+            "/api/principals",
+            json={"subject": "test-user", "display_name": "Test User", "role": "viewer"},
+            headers=admin_headers,
+        ).json()
+        token = client.post(
+            "/api/tokens",
+            json={
+                "name": "test-token",
+                "principal_id": principal["id"],
+                "server_ids": ["dev"],
+                "scope": "readonly",
+            },
+            headers=admin_headers,
+        ).json()
+        response = client.get("/api/meta", headers={"Authorization": f"Bearer {token['token']}"})
+        assert response.status_code == 200
+
+
 def test_agent_credentials_are_separate_and_revocable(tmp_path, store, monkeypatch):
     app = create_app(_config(tmp_path, username="admin", password="secret", admin_token="admin-secret"), store=store)
     headers = {"Authorization": "Basic " + base64.b64encode(b"admin:secret").decode("ascii")}
@@ -247,4 +363,34 @@ def test_oidc_invalid_jwks_url_rejected(tmp_path, store, monkeypatch):
     with pytest.raises(ValueError, match="https"):
         create_app(config, store=store)
 
+
+def test_oidc_known_subject_allowed(tmp_path, store, monkeypatch):
+    """登録済み subject のOIDCトークンでアクセスできることを確認"""
+    config = _config(tmp_path)
+    config = AppConfig(
+        config_path=config.config_path,
+        servers=config.servers,
+        agent=config.agent,
+        console=ConsoleConfig(
+            data_dir=config.console.data_dir,
+            auth_required=True,
+            auth_mode="oidc",
+            oidc_issuer="https://issuer.example",
+            oidc_audience="lrm",
+            oidc_jwks_url="https://issuer.example/keys",
+            mcp_http=False,
+        ),
+    )
+
+    class FakeValidator:
+        def __init__(self, issuer, audience, jwks_url):
+            pass
+
+        def validate(self, raw_token):
+            return {"sub": raw_token}
+
+    monkeypatch.setattr("app.main.OidcValidator", FakeValidator)
+    store.create_principal("known-sub", "Known User", "viewer")
+    app = create_app(config, store=store)
+    with TestClient(app) as client:
         assert client.get("/api/meta", headers={"Authorization": "Bearer known-sub"}).status_code == 200
