@@ -1,7 +1,8 @@
 "use strict";
 /* 社内管理コンソール UI ロジック (vanilla JS, 外部CDN不要) */
 const API = "/api";
-const state = { meta: null, nodes: [], tokens: [], auto: true, timer: null };
+const state = { meta: null, nodes: [], tokens: [], auto: true, timer: null, csrf: null };
+const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 const $ = (s, c = document) => c.querySelector(s);
 const $$ = (s, c = document) => Array.from(c.querySelectorAll(s));
@@ -24,14 +25,53 @@ function esc(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 async function fetchJSON(url, opt = {}) {
+  const method = opt.method || "GET";
   const headers = { "Content-Type": "application/json", ...(opt.headers || {}) };
-  const r = await fetch(url, { ...opt, headers });
+  if (state.csrf && MUTATING.has(method)) headers["X-CSRF-Token"] = state.csrf;
+  let r = await fetch(url, { ...opt, method, headers });
+  // 401/403 (セッション切れ・CSRF失敗): ブラウザログインが有効なら復旧を試みる
+  if ((r.status === 401 || r.status === 403) && !url.startsWith("/api/auth/")) {
+    const me = await fetch("/api/auth/me", { headers: { "Accept": "application/json" }, redirect: "error" }).catch(() => null);
+    if (me && me.ok) {
+      const body = await me.json();
+      if (body.csrf_token && body.csrf_token !== state.csrf) {
+        state.csrf = body.csrf_token;
+        headers["X-CSRF-Token"] = state.csrf;
+        r = await fetch(url, { ...opt, method, headers }); // CSRFトークン再取得後に1回リトライ
+      }
+    } else if (me && me.status !== 404) {
+      // セッション切れ → ログイン画面へ
+      location.href = "/api/auth/login";
+      return Promise.reject(new Error("再ログインが必要です"));
+    }
+    // me.status === 404 はブラウザログイン無効 (Basic認証ベース) のため従来どおり
+  }
   if (!r.ok) {
     let detail = r.statusText;
     try { detail = (await r.json()).detail || detail; } catch (e) { detail = await r.text() || detail; }
     throw new Error(`HTTP ${r.status}: ${detail}`);
   }
   return r.json();
+}
+async function checkAuth() {
+  /* OIDCブラウザログイン有効時: セッション確認とCSRFトークン取得を行う。
+     /api/auth/me が404を返す場合 (ブラウザログイン無効) はBasic認証ダイアログに委譲する。 */
+  const me = await fetch("/api/auth/me", { headers: { "Accept": "application/json" }, redirect: "error" }).catch(() => null);
+  if (me && me.status === 404) return;
+  if (!me || !me.ok) { location.href = "/api/auth/login"; return; }
+  let body;
+  try { body = await me.json(); } catch (e) { return; }
+  if (!body.authenticated) { location.href = "/api/auth/login"; return; }
+  state.csrf = body.csrf_token || null;
+  const info = $("#auth-info");
+  if (info) {
+    info.innerHTML = `<span class="auth-user">${esc(body.display_name || body.subject)}</span><button class="btn logout-btn" id="logout-btn" type="button">ログアウト</button>`;
+    const btn = $("#logout-btn");
+    if (btn) btn.addEventListener("click", async () => {
+      try { await fetch("/api/auth/logout", { method: "POST" }); } catch (e) { /* ignore */ }
+      location.href = "/";
+    });
+  }
 }
 const STATUS_CLASS = { running: "badge-running", auth_error: "badge-auth_error", http_error: "badge-http_error", not_responding: "badge-not_responding", unreachable: "badge-unreachable", no_token: "badge-no_token", error: "badge-error" };
 function badgeStatus(klass, label) { return `<span class="badge ${STATUS_CLASS[klass] || "badge-error"}">${esc(label)}</span>`; }
@@ -363,6 +403,7 @@ function startAuto() {
 }
 async function init() {
   setupTabs();
+  await checkAuth();
   try { state.meta = await fetchJSON(API + "/meta"); $("#app-version").textContent = "v" + (state.meta.version || "0.1.0"); renderHelp(); }
   catch (e) { toast(e.message, "err"); }
   $("#reload-nodes").onclick = () => loadNodes();
