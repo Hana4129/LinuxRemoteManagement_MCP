@@ -9,7 +9,7 @@ import (
 )
 
 func TestMetricsEndpoint_NoAuth(t *testing.T) {
-	agent := newTestAgent()
+	agent := newTestAgent(t)
 	defer agent.Shutdown()
 
 	req := httptest.NewRequest("GET", "/metrics", nil)
@@ -24,7 +24,7 @@ func TestMetricsEndpoint_NoAuth(t *testing.T) {
 }
 
 func TestMetricsEndpoint_PrometheusFormat(t *testing.T) {
-	agent := newTestAgent()
+	agent := newTestAgent(t)
 	defer agent.Shutdown()
 
 	// Generate some metrics
@@ -57,7 +57,7 @@ func TestMetricsEndpoint_PrometheusFormat(t *testing.T) {
 }
 
 func TestMetricsEndpoint_MethodNotAllowed(t *testing.T) {
-	agent := newTestAgent()
+	agent := newTestAgent(t)
 	defer agent.Shutdown()
 
 	req := httptest.NewRequest("POST", "/metrics", nil)

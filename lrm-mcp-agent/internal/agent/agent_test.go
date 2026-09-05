@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -16,17 +18,17 @@ func hashToken(token string) string {
 	return hex.EncodeToString(h[:])
 }
 
-func newTestAgent() *Agent {
+func newTestConfig(dataDir string) *config.Config {
 	cfg := &config.Config{
 		Agent: config.AgentConfig{
 			Name:    "test-agent",
 			Listen:  ":8443",
-			DataDir: "./data",
+			DataDir: dataDir,
 			Env:     "test",
 			AdminTokenHash: hashToken("admin-secret"),
 			TLS: config.TLSConfig{
-				AutoCertFile: "./data/server.crt",
-				AutoKeyFile:  "./data/server.key",
+				AutoCertFile: dataDir + "/server.crt",
+				AutoKeyFile:  dataDir + "/server.key",
 			},
 			Tokens: []config.TokenEntry{
 				{
@@ -70,20 +72,51 @@ func newTestAgent() *Agent {
 			},
 			Audit: config.AuditConfig{
 				Enabled:  false,
-				LogFile: "./data/audit.log",
+				LogFile:  dataDir + "/audit.log",
 			},
 		},
 	}
 
-	agent, err := New(cfg)
+	return cfg
+}
+
+func newTestAgent(t *testing.T) *Agent {
+	t.Helper()
+	return newTestAgentInDir(t.TempDir())
+}
+
+// newTestAgentInDir は指定ディレクトリへ失効記録を書くテスト用エージェントを生成する。
+func newTestAgentInDir(dataDir string) *Agent {
+	agent, err := New(newTestConfig(dataDir))
 	if err != nil {
 		panic(err)
 	}
 	return agent
 }
 
+// revokeTokenViaAPI は管理endpoint経由でトークンを失効させる。
+func revokeTokenViaAPI(t *testing.T, handler http.Handler, tokenID string) {
+	t.Helper()
+	revoke := httptest.NewRequest("POST", "/v1/admin/tokens/"+tokenID+"/revoke", nil)
+	revoke.Header.Set("X-LRM-Admin-Token", "admin-secret")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, revoke)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected admin revoke to succeed, got %d", rr.Code)
+	}
+}
+
+// requestWithToken はBearerトークン付きリクエストのステータスコードを返す。
+func requestWithToken(handler http.Handler, token string) int {
+	req := httptest.NewRequest("GET", "/v1/system", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	return rr.Code
+}
+
 func TestAuthenticate_ValidToken(t *testing.T) {
-	agent := newTestAgent()
+	agent := newTestAgent(t)
 	defer agent.Shutdown()
 
 	req := httptest.NewRequest("GET", "/v1/system", nil)
@@ -100,7 +133,7 @@ func TestAuthenticate_ValidToken(t *testing.T) {
 }
 
 func TestAuthenticate_InvalidToken(t *testing.T) {
-	agent := newTestAgent()
+	agent := newTestAgent(t)
 	defer agent.Shutdown()
 
 	req := httptest.NewRequest("GET", "/v1/system", nil)
@@ -117,7 +150,7 @@ func TestAuthenticate_InvalidToken(t *testing.T) {
 }
 
 func TestHandleSystem_Readonly(t *testing.T) {
-	agent := newTestAgent()
+	agent := newTestAgent(t)
 	defer agent.Shutdown()
 
 	req := httptest.NewRequest("GET", "/v1/system", nil)
@@ -134,7 +167,7 @@ func TestHandleSystem_Readonly(t *testing.T) {
 }
 
 func TestHandleDisk_Readonly(t *testing.T) {
-	agent := newTestAgent()
+	agent := newTestAgent(t)
 	defer agent.Shutdown()
 
 	req := httptest.NewRequest("GET", "/v1/disk", nil)
@@ -151,7 +184,7 @@ func TestHandleDisk_Readonly(t *testing.T) {
 }
 
 func TestHandleProcesses_Readonly(t *testing.T) {
-	agent := newTestAgent()
+	agent := newTestAgent(t)
 	defer agent.Shutdown()
 
 	req := httptest.NewRequest("GET", "/v1/processes", nil)
@@ -168,7 +201,7 @@ func TestHandleProcesses_Readonly(t *testing.T) {
 }
 
 func TestHandleServices_Readonly(t *testing.T) {
-	agent := newTestAgent()
+	agent := newTestAgent(t)
 	defer agent.Shutdown()
 
 	req := httptest.NewRequest("GET", "/v1/services/nginx", nil)
@@ -185,7 +218,7 @@ func TestHandleServices_Readonly(t *testing.T) {
 }
 
 func TestHandleExecute_OperatorOnly(t *testing.T) {
-	agent := newTestAgent()
+	agent := newTestAgent(t)
 	defer agent.Shutdown()
 
 	req := httptest.NewRequest("POST", "/v1/execute", strings.NewReader(`{"command":"systemctl restart nginx"}`))
@@ -203,7 +236,7 @@ func TestHandleExecute_OperatorOnly(t *testing.T) {
 }
 
 func TestHandleRestart_OperatorOnly(t *testing.T) {
-	agent := newTestAgent()
+	agent := newTestAgent(t)
 	defer agent.Shutdown()
 
 	req := httptest.NewRequest("POST", "/v1/services/nginx/restart", nil)
@@ -220,7 +253,7 @@ func TestHandleRestart_OperatorOnly(t *testing.T) {
 }
 
 func TestPolicyEngine_Integration(t *testing.T) {
-	agent := newTestAgent()
+	agent := newTestAgent(t)
 	defer agent.Shutdown()
 
 	if agent.engine == nil {
@@ -233,7 +266,7 @@ func TestPolicyEngine_Integration(t *testing.T) {
 }
 
 func TestAuthenticate_NoToken(t *testing.T) {
-	agent := newTestAgent()
+	agent := newTestAgent(t)
 	defer agent.Shutdown()
 
 	req := httptest.NewRequest("GET", "/v1/system", nil)
@@ -249,7 +282,7 @@ func TestAuthenticate_NoToken(t *testing.T) {
 }
 
 func TestAuthenticate_WrongFormat(t *testing.T) {
-	agent := newTestAgent()
+	agent := newTestAgent(t)
 	defer agent.Shutdown()
 
 	req := httptest.NewRequest("GET", "/v1/system", nil)
@@ -266,7 +299,7 @@ func TestAuthenticate_WrongFormat(t *testing.T) {
 }
 
 func TestAdminTokenRevoke_DisablesTokenImmediately(t *testing.T) {
-	agent := newTestAgent()
+	agent := newTestAgent(t)
 	defer agent.Shutdown()
 	handler := agent.Handler()
 
@@ -288,7 +321,7 @@ func TestAdminTokenRevoke_DisablesTokenImmediately(t *testing.T) {
 }
 
 func TestAdminTokenRevoke_InvalidSecret(t *testing.T) {
-	agent := newTestAgent()
+	agent := newTestAgent(t)
 	defer agent.Shutdown()
 	revoke := httptest.NewRequest("POST", "/v1/admin/tokens/ro-token/revoke", nil)
 	revoke.Header.Set("X-LRM-Admin-Token", "wrong-secret")
@@ -300,7 +333,7 @@ func TestAdminTokenRevoke_InvalidSecret(t *testing.T) {
 }
 
 func TestHandleHealth_NoAuth(t *testing.T) {
-	agent := newTestAgent()
+	agent := newTestAgent(t)
 	defer agent.Shutdown()
 
 	req := httptest.NewRequest("GET", "/v1/health", nil)
@@ -312,5 +345,65 @@ func TestHandleHealth_NoAuth(t *testing.T) {
 
 	if rr.Code != http.StatusOK {
 		t.Errorf("expected 200 for health check, got %d", rr.Code)
+	}
+}
+
+func TestRevocationSurvivesConfigReload(t *testing.T) {
+	dir := t.TempDir()
+	agent := newTestAgentInDir(dir)
+	defer agent.Shutdown()
+	handler := agent.Handler()
+
+	revokeTokenViaAPI(t, handler, "ro-token")
+
+	// config 上は ro-token が有効のまま reload (hot reload相当)
+	agent.Reload(newTestConfig(dir))
+
+	// reload後も失効済みトークンは401のまま (復活しない)
+	if code := requestWithToken(agent.Handler(), "ro-secret"); code != http.StatusUnauthorized {
+		t.Errorf("expected revoked token to stay unauthorized after reload, got %d", code)
+	}
+	// 他のトークンは影響を受けない
+	if code := requestWithToken(agent.Handler(), "op-secret"); code == http.StatusUnauthorized {
+		t.Errorf("expected non-revoked token to remain authenticated after reload, got %d", code)
+	}
+}
+
+func TestRevocationPersistsAcrossRestart(t *testing.T) {
+	dir := t.TempDir()
+	first := newTestAgentInDir(dir)
+	revokeTokenViaAPI(t, first.Handler(), "ro-token")
+	first.Shutdown()
+
+	// 同じ dataDir で再起動相当: config 上は ro-token 有効
+	second := newTestAgentInDir(dir)
+	defer second.Shutdown()
+
+	if code := requestWithToken(second.Handler(), "ro-secret"); code != http.StatusUnauthorized {
+		t.Errorf("expected revoked token to stay unauthorized after restart, got %d", code)
+	}
+	if code := requestWithToken(second.Handler(), "op-secret"); code == http.StatusUnauthorized {
+		t.Errorf("expected non-revoked token to remain authenticated after restart, got %d", code)
+	}
+}
+
+func TestRevocationStoreWritesFile(t *testing.T) {
+	dir := t.TempDir()
+	agent := newTestAgentInDir(dir)
+	defer agent.Shutdown()
+
+	revokeTokenViaAPI(t, agent.Handler(), "ro-token")
+	// 冪等性: 同じトークンの重複失効も成功する
+	revokeTokenViaAPI(t, agent.Handler(), "ro-token")
+
+	data, err := os.ReadFile(filepath.Join(dir, "revocations.json"))
+	if err != nil {
+		t.Fatalf("expected revocations.json to be written: %v", err)
+	}
+	if !strings.Contains(string(data), "ro-token") {
+		t.Errorf("expected revocations.json to contain ro-token, got: %s", data)
+	}
+	if filepath.Base(dir) == "" || len(agent.revocations.ids()) != 1 {
+		t.Errorf("expected exactly 1 revoked token id, got %v", agent.revocations.ids())
 	}
 }

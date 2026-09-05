@@ -24,6 +24,7 @@ type Agent struct {
 	auditLog    *audit.Logger
 	tokens      map[string]tokenEntry
 	rateLimiter *rateLimiter
+	revocations *revocationStore
 	mu          sync.RWMutex
 }
 
@@ -61,10 +62,16 @@ func New(cfg *config.Config) (*Agent, error) {
 		auditLog:    auditLog,
 		tokens:      make(map[string]tokenEntry),
 		rateLimiter: newRateLimiter(cfg.Agent.RateLimit.PerMinute, cfg.Agent.RateLimit.Burst),
+		revocations: newRevocationStore(cfg.Agent.DataDir),
 	}
 	for _, t := range cfg.Agent.Tokens {
 		a.addToken(t)
 	}
+	// 再起動後に失効済みトークンが復活しないよう、起動時に永続化済み失効を読み込む
+	if err := a.revocations.load(); err != nil {
+		log.Printf("revocation load failed (starting without persisted revocations): %v", err)
+	}
+	a.applyRevocations()
 	return a, nil
 }
 
@@ -152,10 +159,38 @@ func (a *Agent) Reload(cfg *config.Config) {
 		}
 	}
 
+	// hot reload で失効済みトークンが復活しないよう、
+	// ディスクから最新の失効記録を読み込んで新マップへ再適用する
+	if err := a.revocations.load(); err != nil {
+		log.Printf("revocation reload failed (keeping in-memory state): %v", err)
+	}
+	applyRevocations(tokens, engine, a.revocations)
+
 	a.engine = engine
 	a.tokens = tokens
 	a.auditLog.Log("system", "config_reload", cfg.Agent.Name, "ok", "", "")
 	log.Printf("agent reloaded: %d tokens active", len(tokens))
+}
+
+// applyRevocations はエージェント全体 (現在のtokens/engine) に永続化済み失効を適用する。
+func (a *Agent) applyRevocations() {
+	a.mu.RLock()
+	tokens, engine := a.tokens, a.engine
+	a.mu.RUnlock()
+	applyRevocations(tokens, engine, a.revocations)
+}
+
+// applyRevocations はトークンマップとポリシーエンジンへ失効状態を適用する。
+func applyRevocations(tokens map[string]tokenEntry, engine *policy.Engine, store *revocationStore) {
+	for _, id := range store.ids() {
+		if entry, ok := tokens[id]; ok && !entry.Disabled {
+			entry.Disabled = true
+			tokens[id] = entry
+		}
+		if tp := engine.GetToken(id); tp != nil {
+			tp.Disabled = true
+		}
+	}
 }
 
 func (a *Agent) Handler() http.Handler {
@@ -202,6 +237,10 @@ func (a *Agent) handleAdminToken(w http.ResponseWriter, r *http.Request) {
 	}
 	if policyToken := a.engine.GetToken(tokenID); policyToken != nil {
 		policyToken.Disabled = true
+	}
+	// 失効を永続化し、reload/再起動後も旧tokenが復活しないようにする
+	if err := a.revocations.add(tokenID); err != nil {
+		log.Printf("revocation persist failed for %s (in-memory revoke still active): %v", tokenID, err)
 	}
 	a.auditLog.Log("admin", "token_revoke", tokenID, "ok", "", clientIP(r))
 	writeJSON(w, http.StatusOK, map[string]interface{}{"revoked": true, "token_id": tokenID})
