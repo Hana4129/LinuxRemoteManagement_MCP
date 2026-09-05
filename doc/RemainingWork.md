@@ -20,7 +20,7 @@ Linux Remote Management MCP の認証・認可分離に関する残作業をま�
 - 管理コンソール静的アセットのバージョン付きキャッシュ制御
 - Basic認証アカウントをadmin principalとして扱う認証主体統一
 - 管理コンソールのMCP Bearerトークン認証 (principal紐付けトークンのRBAC強制・無効/未紐付けトークンの401拒否)
-- Python テスト 114 件
+- Python テスト 128 件
 
 ## 優先度 P0: 本番導入前に必要
 
@@ -267,14 +267,19 @@ OIDCをブラウザログインに利用する場合は、Authorization header�
 
 ### 12. テスト拡張
 
-- OIDC実JWTとJWKSの統合テスト
-- admin/operator/viewerの管理操作マトリクス
-- principal A/Bのserver権限分離
-- Agent停止中の失効同期
-- Agent復旧後の失効再送
-- mTLS接続テスト
-- 並行したgrant/revokeとtool実行
-- SQLite migrationの既存DB互換テスト
+**状態: 主要項目を実装済み (`tests/test_rbac_matrix.py`)。mTLS接続テストは実環境で実施。**
+
+- OIDC実JWTとJWKSの統合テスト (実装済み: RS256実署名JWT、改竄・期限切れ・audience不一致・未知kid・鍵ローテーション)
+- admin/operator/viewerの管理操作マトリクス (実装済み: create/grant/revoke/disable x 3ロール)
+- principal A/Bのserver権限分離 (実装済み: token_for による分離・失効後拒否)
+- 並行したgrant/revokeとtool実行 (実装済み: マルチスレッドで認証と権限更新を並行実行)
+- SQLite migrationの既存DB互換テスト (実装済み: 旧スキーマDBの自動migrationと旧行保持)
+- Agent停止中の失効同期・Agent復旧後の失効再送 (実装済み: test_auth.py)
+- mTLS接続テスト (実環境での検証が必要)
+
+このテスト拡張で `db.py` の既存バグを2件発見・修正した。
+1. `rotate_token` がローカル変数でimport関数 `new_token_id` を上書きし、MCPトークンのローテーションが常にUnboundLocalErrorで失敗していた
+2. `rotate_token` のINSERTで新トークンの `rotated_from` が常にNULLになり、ローテーション系譜が記録されていなかった
 
 ## 実施順序
 

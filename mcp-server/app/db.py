@@ -659,7 +659,7 @@ class TokenStore:
 
         # 新しいトークンを生成
         rotation_id = "rot_" + secrets.token_hex(8)
-        new_token_id = new_token_id()
+        new_id = new_token_id()
         raw = generate_token()
         token_hash = hash_token(raw)
         prefix = token_prefix(raw)
@@ -676,10 +676,10 @@ class TokenStore:
                         INSERT INTO tokens
                         (id, name, token_raw, token_hash, prefix, server_ids, scope,
                          created_at, expires_at, enabled, created_by, rotated_from, grace_ends_at, principal_id)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL, NULL, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, NULL, ?)
                         """,
                         (
-                            new_token_id,
+                            new_id,
                             old_record.name,
                             raw,
                             token_hash,
@@ -689,6 +689,7 @@ class TokenStore:
                             now,
                             new_expires,
                             rotated_by,
+                            old_token_id,
                             old_record.principal_id,
                         ),
                     )
@@ -711,10 +712,10 @@ class TokenStore:
                 (id, old_token_id, new_token_id, rotated_at, grace_ends_at, rotated_by)
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (rotation_id, old_token_id, new_token_id, now, grace_ends, rotated_by),
+                (rotation_id, old_token_id, new_id, now, grace_ends, rotated_by),
             )
 
-        new_record = self.get_token(new_token_id)
+        new_record = self.get_token(new_id)
         if new_record is None:
             raise RuntimeError("トークンローテーション後の取得に失敗しました")
         new_record.token_raw = raw
