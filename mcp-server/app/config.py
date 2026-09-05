@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +27,15 @@ class ServerConfig:
     url: str
     env: str = "development"
     description: str = ""
+
+    def to_yaml_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "url": self.url,
+            "env": self.env,
+            "description": self.description,
+        }
 
 
 @dataclass(frozen=True)
@@ -65,6 +74,9 @@ class AppConfig:
     servers: tuple[ServerConfig, ...]
     agent: AgentConfig
     console: ConsoleConfig
+    # 元の config.yml の生データ (save 時に servers だけ差し替えて書き戻す)。
+    # username/password/mcp_http_path/agent.client_cert など未知のキーを保持する。
+    raw: dict[str, Any] = field(default_factory=dict)
 
     def server(self, server_id: str) -> ServerConfig | None:
         for server in self.servers:
@@ -82,6 +94,85 @@ class AppConfig:
         if not path.is_absolute():
             path = (self.config_path.parent / path).resolve()
         return path
+
+    def add_server(self, server: ServerConfig) -> "AppConfig":
+        """サーバーを追加してconfig.ymlに永続化し、新しいAppConfigを返す。"""
+        new_servers = tuple(s for s in self.servers if s.id != server.id) + (server,)
+        return AppConfig(
+            config_path=self.config_path,
+            servers=new_servers,
+            agent=self.agent,
+            console=self.console,
+            raw=self.raw,
+        )
+
+    def remove_server(self, server_id: str) -> "AppConfig":
+        """指定IDのサーバーを削除してconfig.ymlに永続化し、新しいAppConfigを返す。"""
+        new_servers = tuple(s for s in self.servers if s.id != server_id)
+        return AppConfig(
+            config_path=self.config_path,
+            servers=new_servers,
+            agent=self.agent,
+            console=self.console,
+            raw=self.raw,
+        )
+
+    def save(self) -> None:
+        """現在の設定をconfig.ymlに書き戻す。
+
+        元の raw (console/agent の未知キー含む) をベースに、servers のみ
+        差分を反映する。Basic認証の username/password、MCP HTTP path、
+        mTLS 証明書などの設定を失わない。
+        """
+        data: dict[str, Any] = dict(self.raw)
+
+        # console / agent の現行値をマージ (raw に存在しない項目だけ保証)。
+        console_raw = dict(data.get("console") or {})
+        console_raw.update(
+            {
+                "host": self.console.host,
+                "port": self.console.port,
+                "data_dir": self.console.data_dir,
+                "mcp_http": self.console.mcp_http,
+                "require_approval": self.console.require_approval,
+                "approval_ttl_minutes": self.console.approval_ttl_minutes,
+                "mcp_audit": self.console.mcp_audit,
+                "max_parallel_nodes": self.console.max_parallel_nodes,
+                "rate_limit_per_minute": self.console.rate_limit_per_minute,
+                "rate_limit_burst": self.console.rate_limit_burst,
+                "audit_max_size_mb": self.console.audit_max_size_mb,
+                "audit_max_backups": self.console.audit_max_backups,
+                "audit_compress": self.console.audit_compress,
+                # mcp_http_path は raw にあれば保持
+                "mcp_http_path": self.console.mcp_http_path,
+            }
+        )
+        # username/password は raw に無い場合は書き出さない (コメントで設定されるため)。
+        if self.console.username:
+            console_raw["username"] = self.console.username
+        if self.console.password:
+            console_raw["password"] = self.console.password
+
+        agent_raw = dict(data.get("agent") or {})
+        agent_raw.update(
+            {
+                "timeout_seconds": self.agent.timeout_seconds,
+                "tls_verify": self.agent.tls_verify,
+                "user_agent": self.agent.user_agent,
+            }
+        )
+        # mTLS などの拡張キーは raw にあれば保持
+        if self.agent.client_cert:
+            agent_raw["client_cert"] = self.agent.client_cert
+        if self.agent.client_key:
+            agent_raw["client_key"] = self.agent.client_key
+
+        data["console"] = console_raw
+        data["agent"] = agent_raw
+        data["servers"] = [s.to_yaml_dict() for s in self.servers]
+
+        with open(self.config_path, "w", encoding="utf-8") as f:
+            yaml.dump(data, f, default_flow_style=False, allow_unicode=True)
 
 
 def _find_config(explicit: str | Path | None) -> Path:
@@ -117,6 +208,7 @@ def _console_from_raw(raw: dict[str, Any], agent_user: str, agent_pass: str) -> 
         port=int(raw.get("port", 8080)),
         data_dir=str(raw.get("data_dir", "./data")),
         mcp_http=bool(raw.get("mcp_http", True)),
+        mcp_http_path=str(raw.get("mcp_http_path", "/mcp")),
         username=user,
         password=password,
         require_approval=bool(raw.get("require_approval", True)),
@@ -168,4 +260,4 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         agent_pass=os.environ.get("LINUX_MCP_CONSOLE_PASS", ""),
     )
 
-    return AppConfig(config_path=config_path, servers=tuple(servers), agent=agent, console=console)
+    return AppConfig(config_path=config_path, servers=tuple(servers), agent=agent, console=console, raw=raw)

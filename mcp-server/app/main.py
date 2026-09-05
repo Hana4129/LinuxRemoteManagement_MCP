@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from . import __version__
-from .api import approvals_router, meta_router, nodes_router, tokens_router
+from .api import approvals_router, meta_router, nodes_router, servers_router, tokens_router
 from .approvals import ApprovalStore
 from .config import AppConfig, load_config
 from .db import TokenStore
@@ -145,6 +145,7 @@ def create_app(config: AppConfig | None = None, store: TokenStore | None = None)
     app.include_router(meta_router)
     app.include_router(nodes_router)
     app.include_router(tokens_router)
+    app.include_router(servers_router)
     # 承認APIは require_approval=False でも常設する (無効時は各エンドポイントが503を返す)
     app.include_router(approvals_router)
 

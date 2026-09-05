@@ -13,10 +13,11 @@ VENV_DIR="${PROJECT_DIR}/.venv"
 echo "=== MCP Server Token Setup ==="
 echo ""
 
-# Check Python availability
-if [ -d "$VENV_DIR" ]; then
-    source "${VENV_DIR}/bin/activate"
-    PYTHON="python"
+# Check Python availability (resolve the venv python directly; layouts differ by platform)
+if [ -f "${VENV_DIR}/bin/python" ]; then
+    PYTHON="${VENV_DIR}/bin/python"
+elif [ -f "${VENV_DIR}/Scripts/python.exe" ]; then
+    PYTHON="${VENV_DIR}/Scripts/python.exe"
 else
     PYTHON="python3"
 fi
@@ -158,5 +159,5 @@ echo "=== Token setup complete ==="
 echo ""
 echo "Next steps:"
 echo "  1. Copy the tokens above to your agent config.yml files"
-echo "  2. Start the MCP Server: source ${VENV_DIR}/bin/activate && python -m app"
+echo "  2. Start the MCP Server: ./start_server.sh"
 echo ""

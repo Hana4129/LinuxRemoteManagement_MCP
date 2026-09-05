@@ -35,6 +35,7 @@ log = logging.getLogger(__name__)
 meta_router = APIRouter(prefix="/api", tags=["meta"])
 nodes_router = APIRouter(prefix="/api/nodes", tags=["nodes"])
 tokens_router = APIRouter(prefix="/api/tokens", tags=["tokens"])
+servers_router = APIRouter(prefix="/api/servers", tags=["servers"])
 
 
 class TokenCreateRequest(BaseModel):
@@ -55,6 +56,19 @@ class TokenImportRequest(BaseModel):
     server_ids: list[str] = Field(..., min_length=1)
     scope: Literal["readonly", "operator"]
     expires_in_days: int | None = Field(default=None, ge=1, le=3650)
+
+
+class ServerAddRequest(BaseModel):
+    """管理コンソールから新規ノードを追加するリクエスト。"""
+    id: str = Field(..., min_length=1, max_length=100, description="サーバーID (英数字とハイフンのみ)")
+    name: str = Field(..., min_length=1, max_length=200, description="表示名")
+    url: str = Field(..., min_length=1, max_length=2000, description="Agent の Base URL (https://host:9443)")
+    env: str = Field(default="development", description="環境 (development/staging/production)")
+    description: str = Field(default="", max_length=1000, description="説明")
+    issue_token: bool = Field(default=False, description="追加と同時にトークンを発行するか")
+    token_name: str | None = Field(default=None, max_length=100, description="トークン名 (issue_token=true時)")
+    token_scope: Literal["readonly", "operator"] = Field(default="readonly", description="トークンスコープ")
+    token_expires_in_days: int | None = Field(default=None, ge=1, le=3650, description="トークン有効期限(日)")
 
 
 def _payload(result: AgentResult) -> dict:
@@ -252,6 +266,115 @@ def cleanup_grace_periods(request: Request) -> dict[str, Any]:
     store: TokenStore = request.app.state.store
     count = store.cleanup_expired_grace_periods()
     return {"cleaned": count}
+
+
+# ---- servers (nodes management) ----
+import re as _re
+
+_SERVER_ID_RE = _re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9\-_]*$")
+
+
+def _validate_server_id(server_id: str) -> None:
+    if not _SERVER_ID_RE.match(server_id):
+        raise HTTPException(
+            status_code=400,
+            detail="サーバーIDは英数字、ハイフン、アンダースコアのみ使用可能です (先頭は英数字)",
+        )
+
+
+@servers_router.get("")
+def list_servers(request: Request) -> dict[str, Any]:
+    """登録されている管理対象ノードの一覧を返す。"""
+    cfg = request.app.state.config
+    return {
+        "servers": [
+            {"id": s.id, "name": s.name, "url": s.url, "env": s.env, "description": s.description}
+            for s in cfg.servers
+        ]
+    }
+
+
+@servers_router.post("")
+def add_server(request: Request, payload: ServerAddRequest) -> dict[str, Any]:
+    """新しい管理対象ノードを追加する (config.ymlに永続化)。"""
+    _validate_server_id(payload.id)
+    cfg: "AppConfig" = request.app.state.config
+
+    # ID重複チェック
+    if cfg.server(payload.id) is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"サーバーIDが既に登録済みです: {payload.id}",
+        )
+
+    # URL形式チェック
+    if not payload.url.startswith(("http://", "https://")):
+        raise HTTPException(
+            status_code=400,
+            detail="URLは http:// または https:// で始まる必要があります",
+        )
+
+    new_server = ServerConfig(
+        id=payload.id,
+        name=payload.name,
+        url=payload.url.rstrip("/"),
+        env=payload.env,
+        description=payload.description,
+    )
+
+    new_cfg = cfg.add_server(new_server)
+    new_cfg.save()
+
+    # アプリの設定を更新 (in-memory)
+    request.app.state.config = new_cfg
+
+    log.info("サーバー追加 id=%s name=%r url=%s env=%s", payload.id, payload.name, payload.url, payload.env)
+
+    result: dict[str, Any] = {"server": new_server.to_yaml_dict(), "token": None}
+
+    # トークン同時発行
+    if payload.issue_token:
+        client_host = request.client.host if request.client is not None else ""
+        token_name = payload.token_name or f"token-for-{payload.id}"
+        record, raw = request.app.state.store.create_token(
+            name=token_name,
+            server_ids=[payload.id],
+            scope=payload.token_scope,
+            expires_in_days=payload.token_expires_in_days,
+            created_by=f"console:{client_host}",
+        )
+        result["token"] = raw
+        result["token_record"] = record.to_dict()
+        log.info("ノード追加に伴うトークン発行 id=%s token_id=%s", payload.id, record.id)
+
+    return result
+
+
+@servers_router.delete("/{server_id}")
+def delete_server(request: Request, server_id: str) -> dict[str, Any]:
+    """管理対象ノードを削除する (config.ymlから削除 + 関連トークンの失効)。"""
+    cfg: "AppConfig" = request.app.state.config
+    if cfg.server(server_id) is None:
+        raise HTTPException(status_code=404, detail=f"サーバーが見つかりません: {server_id}")
+
+    # 関連するトークンを失効
+    store: TokenStore = request.app.state.store
+    tokens = store.list_tokens()
+    revoked = []
+    for t in tokens:
+        if server_id in t.server_ids or "*" in t.server_ids:
+            store.revoke_token(t.id)
+            revoked.append(t.id)
+
+    new_cfg = cfg.remove_server(server_id)
+    new_cfg.save()
+    request.app.state.config = new_cfg
+
+    log.info("サーバー削除 id=%s (revoked_tokens=%s)", server_id, revoked)
+    return {"deleted": True, "id": server_id, "revoked_tokens": revoked}
+
+
+
 
 
 

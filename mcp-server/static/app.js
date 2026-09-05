@@ -48,11 +48,11 @@ async function loadNodes() {
   try {
     const data = await fetchJSON(API + "/nodes");
     state.nodes = data.nodes;
-    tb.innerHTML = state.nodes.length ? "" : '<tr><td colspan="10" class="loading">ノードが未登録</td></tr>';
+    tb.innerHTML = state.nodes.length ? "" : '<tr><td colspan="11" class="loading">ノードが未登録</td></tr>';
     state.nodes.forEach((n) => { const tr = document.createElement("tr"); tr.innerHTML = nodeRowHtml(n); tb.appendChild(tr); });
     const sum = data.summary;
     $("#node-summary").innerHTML = `<span class="badge badge-running">稼働中: ${sum.running || 0}</span> <strong>${sum.total || 0}</strong> 台 <span class="badge badge-error">問題: ${sum.problems || 0}</span>`;
-  } catch (e) { tb.innerHTML = `<tr><td colspan="10" class="loading">${esc(e.message)}</td></tr>`; }
+  } catch (e) { tb.innerHTML = `<tr><td colspan="11" class="loading">${esc(e.message)}</td></tr>`; }
 }
 function nodeRowHtml(n) {
   const os = n.os ? (n.os.os || "—") : "—";
@@ -63,9 +63,10 @@ function nodeRowHtml(n) {
   const agent = n.agent_version || "—";
   let nameCell = `<strong>${esc(n.name)}</strong><div class="small">${esc(n.id)}</div>`;
   if (n.error) nameCell += `<div class="err" style="color:#cf222e;font-size:11px">${esc(n.error)}</div>`;
+  const deleteBtn = `<button class="btn danger" data-action="delete-node" data-node-id="${esc(n.id)}" type="button" style="font-size:11px">Delete</button>`;
   return `<td>${nameCell}</td><td>${badgeEnv(n.env)}</td><td>${badgeStatus(n.install_status, n.install_status_label)}</td>
     <td>${esc(os)}</td><td>${esc(kernel)}</td><td>${esc(host)}</td><td>${esc(uptime)}</td>
-    <td>${esc(agent)}</td><td>${esc(resp)}</td><td>${fmtDate(n.checked_at)}</td>`;
+    <td>${esc(agent)}</td><td>${esc(resp)}</td><td>${fmtDate(n.checked_at)}</td><td>${deleteBtn}</td>`;
 }
 
 /* ---- tokens ---- */
@@ -231,6 +232,67 @@ async function doApproveAction(action, id) {
   else doIt();
 }
 
+
+/* ---- add node ---- */
+function openAddNodeDialog() {
+  $("#n-id").value = "";
+  $("#n-name").value = "";
+  $("#n-url").value = "";
+  $("#n-env").value = "development";
+  $("#n-desc").value = "";
+  $("#n-issue-token").checked = false;
+  $("#token-options").style.display = "none";
+  $("#add-node-dialog").showModal();
+}
+
+$("#n-issue-token").addEventListener("change", (e) => {
+  $("#token-options").style.display = e.target.checked ? "block" : "none";
+});
+
+$("#add-node-form").onsubmit = async (e) => {
+  e.preventDefault();
+  const payload = {
+    id: $("#n-id").value.trim(),
+    name: $("#n-name").value.trim(),
+    url: $("#n-url").value.trim(),
+    env: $("#n-env").value,
+    description: $("#n-desc").value.trim(),
+    issue_token: $("#n-issue-token").checked,
+    token_name: $("#n-issue-token").checked ? $("#n-name").value.trim() + " access" : null,
+    token_scope: $("#n-token-scope").value,
+  };
+  try {
+    const result = await fetchJSON(API + "/servers", { method: "POST", body: JSON.stringify(payload) });
+    $("#add-node-dialog").close();
+    if (result.token) {
+      $("#raw-token").textContent = result.token;
+      $("#token-result").showModal();
+      toast("Node added. Token issued (shown once).", "ok");
+    } else {
+      toast("Node added", "ok");
+    }
+    loadNodes();
+    loadTokens();
+  } catch (err) {
+    toast(err.message, "err");
+  }
+};
+
+$("#n-cancel").onclick = () => $("#add-node-dialog").close();
+
+async function doDeleteNode(nodeId) {
+  confirmAction("Delete Node", `Delete node '${nodeId}'? Related tokens will be revoked. This cannot be undone.`, async () => {
+    try {
+      await fetchJSON(API + "/servers/" + encodeURIComponent(nodeId), { method: "DELETE" });
+      toast("Node deleted", "ok");
+      loadNodes();
+      loadTokens();
+    } catch (e) {
+      toast(e.message, "err");
+    }
+  });
+}
+
 function startAuto() {
   if (state.timer) clearInterval(state.timer);
   state.timer = setInterval(() => { if (state.auto) { loadNodes(); loadTokens(); } }, 30000);
@@ -240,6 +302,16 @@ async function init() {
   try { state.meta = await fetchJSON(API + "/meta"); $("#app-version").textContent = "v" + (state.meta.version || "0.1.0"); renderHelp(); }
   catch (e) { toast(e.message, "err"); }
   $("#reload-nodes").onclick = () => loadNodes();
+  const addBtn = $("#add-node-btn");
+  if (addBtn) addBtn.onclick = () => openAddNodeDialog();
+  const nodesTbody = $("#nodes-tbody");
+  if (nodesTbody) {
+    nodesTbody.addEventListener("click", (e) => {
+      const btn = e.target.closest('button[data-action="delete-node"]');
+      if (!btn) return;
+      doDeleteNode(btn.dataset.nodeId);
+    });
+  }
   $("#reload-tokens").onclick = () => loadTokens();
   $("#open-token-dialog").onclick = () => openIssueDialog();
   $("#auto-reload").onchange = (e) => { state.auto = e.target.checked; };

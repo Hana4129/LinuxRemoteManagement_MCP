@@ -26,6 +26,7 @@
       <div class="toolbar">
         <div id="node-summary" class="summary"></div>
         <div class="toolbar-actions">
+          <button id="add-node-btn" class="btn primary" type="button">Add Node</button>
           <label class="switch"><input type="checkbox" id="auto-reload" checked><span>Auto-refresh 30s</span></label>
           <button id="reload-nodes" class="btn" type="button">Refresh</button>
         </div>
@@ -35,10 +36,10 @@
           <thead>
             <tr>
               <th>Node</th><th>Env</th><th>Install status</th><th>OS</th>
-              <th>Kernel</th><th>Hostname</th><th>Uptime</th><th>Agent</th><th>Latency</th><th>Last checked</th>
+              <th>Kernel</th><th>Hostname</th><th>Uptime</th><th>Agent</th><th>Latency</th><th>Last checked</th><th>Actions</th>
             </tr>
           </thead>
-          <tbody id="nodes-tbody"><tr><td colspan="10" class="loading">Loading...</td></tr></tbody>
+          <tbody id="nodes-tbody"><tr><td colspan="11" class="loading">Loading...</td></tr></tbody>
         </table>
       </div>
       <p class="hint">"Not installed / Agent not running" means TCP RST on the Agent port. Unreachable = network unreachable.</p>
@@ -60,7 +61,7 @@
               <th>Created</th><th>Expires</th><th>Last used</th><th>Status</th><th>Actions</th>
             </tr>
           </thead>
-          <tbody id="tokens-tbody"><tr><td colspan="10" class="loading">Loading...</td></tr></tbody>
+          <tbody id="tokens-tbody"><tr><td colspan="11" class="loading">Loading...</td></tr></tbody>
         </table>
       </div>
     </section>
@@ -82,7 +83,7 @@
               <th>Requested at</th><th>Expires</th><th>Status</th><th>Approver</th><th>Actions</th>
             </tr>
           </thead>
-          <tbody id="approvals-tbody"><tr><td colspan="10" class="loading">Loading...</td></tr></tbody>
+          <tbody id="approvals-tbody"><tr><td colspan="11" class="loading">Loading...</td></tr></tbody>
         </table>
       </div>
       <p class="hint">restart_service requires a human approval. Approve here, then the MCP client re-runs restart_service with the approval_id. Approvals are single-use and expire (TTL 15 min by default).</p>
@@ -100,6 +101,9 @@
           <li><code>GET  /api/tokens</code> - token list (raw value hidden)</li>
           <li><code>POST /api/tokens</code> - issue token (raw value returned once)</li>
           <li><code>POST /api/tokens/import</code> - import externally issued token</li>
+          <li><code>GET  /api/servers</code> - list registered nodes</li>
+          <li><code>POST /api/servers</code> - add a new node (+ optional token)</li>
+          <li><code>DEL  /api/servers/{id}</code> - delete a node (revokes related tokens)</li>
         </ul>
         <h3>MCP client config (claude_desktop_config.json)</h3>
         <pre id="mcp-config-snippet"><code>Loading...</code></pre>
@@ -148,6 +152,35 @@
         <button id="confirm-ok" class="btn danger" type="button">Execute</button>
       </div>
     </div>
+     </dialog>
+
+  <dialog id="add-node-dialog" class="dialog">
+    <form method="dialog" id="add-node-form">
+      <h2>Add Node</h2>
+      <p class="hint">Add a new management target node. This will be saved to config.yml.</p>
+      <div class="field"><label>Server ID</label><input type="text" id="n-id" placeholder="e.g. web-prod-01" required></div>
+      <div class="field"><label>Name</label><input type="text" id="n-name" placeholder="Display name" required></div>
+      <div class="field"><label>URL</label><input type="url" id="n-url" placeholder="https://host:9443" required></div>
+      <div class="field"><label>Environment</label>
+        <select id="n-env">
+          <option value="development">Development</option>
+          <option value="staging">Staging</option>
+          <option value="production">Production</option>
+        </select></div>
+      <div class="field"><label>Description</label><textarea id="n-desc" placeholder="Optional"></textarea></div>
+      <div class="field"><label><input type="checkbox" id="n-issue-token"> Issue MCP token automatically</label></div>
+      <div class="field" id="token-options" style="display:none;">
+        <label>Token Scope</label>
+        <select id="n-token-scope">
+          <option value="readonly">readonly</option>
+          <option value="operator">operator</option>
+        </select>
+      </div>
+      <div class="dialog-actions">
+        <button type="reset" class="btn" id="n-cancel">Cancel</button>
+        <button type="submit" class="btn primary">Add Node</button>
+      </div>
+    </form>
   </dialog>
 
   <div id="toast"></div>

@@ -3,6 +3,9 @@ __pycache__/
 *.pyc
 .pytest_cache/
 
+# 仮想環境 (git 管理外 — setup.sh / start_server.sh が自動構築する)
+.venv/
+
 # 実行時データ（トークンDB等） - 絶対Gitにコミットしない
 data/
 *.db

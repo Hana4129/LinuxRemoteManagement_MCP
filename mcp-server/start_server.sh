@@ -26,6 +26,7 @@ echo "============================================"
 echo ""
 
 # ---- セットアップ完了チェック ----
+# .venv は git 管理外のため、初回起動時 (または必要時) に自動構築する
 setup_needed=false
 
 if [ ! -d "$VENV_DIR" ]; then
@@ -35,7 +36,10 @@ elif [ ! -f "$SETUP_MARKER" ]; then
     echo "  [INFO] セットアップが完了していません。セットアップを実行します。"
     setup_needed=true
 elif [ ! -f "${VENV_DIR}/bin/python" ] && [ ! -f "${VENV_DIR}/Scripts/python.exe" ]; then
-    echo "  [INFO] 仮想環境が破損していますを再セットアップします。"
+    echo "  [INFO] 仮想環境が破損しています。再セットアップします。"
+    setup_needed=true
+elif [ -f "${SCRIPT_DIR}/requirements.txt" ] && [ "${SCRIPT_DIR}/requirements.txt" -nt "$SETUP_MARKER" ]; then
+    echo "  [INFO] requirements.txt が更新されています。依存関係を再インストールします。"
     setup_needed=true
 fi
 
@@ -47,14 +51,14 @@ if [ "$setup_needed" = true ]; then
     echo ""
 fi
 
-# ---- 仮想環境のアクティベート ----
-if [ -f "${VENV_DIR}/bin/activate" ]; then
-    source "${VENV_DIR}/bin/activate"
-elif [ -f "${VENV_DIR}/Scripts/activate" ]; then
-    source "${VENV_DIR}/Scripts/activate"
+# ---- 仮想環境の Python を解決 (Linux/macOS: bin/, Windows Git Bash: Scripts/) ----
+if [ -f "${VENV_DIR}/bin/python" ]; then
+    PYTHON_BIN="${VENV_DIR}/bin/python"
+elif [ -f "${VENV_DIR}/Scripts/python.exe" ]; then
+    PYTHON_BIN="${VENV_DIR}/Scripts/python.exe"
 else
-    echo "  [ERROR] 仮想環境のアクティベートに失敗しました。"
-    echo " 手動でセットアップを実行してください: ./scripts/setup.sh"
+    echo "  [ERROR] 仮想環境のPythonが見つかりません。"
+    echo "  手動でセットアップを実行してください: ./scripts/setup.sh"
     exit 1
 fi
 
@@ -79,6 +83,17 @@ elif command -v ss >/dev/null 2>&1; then
         echo ""
         exit 1
     fi
+elif command -v netstat >/dev/null 2>&1; then
+    # Windows Git Bash 等 (lsof/ss が無い環境)。netstat -an は Windows/Linux/macOS 共通で利用可能
+    if netstat -an 2>/dev/null | grep -E "[:.]${PORT}[[:space:]]" | grep -qi "listen"; then
+        echo "  [ERROR] ポート ${PORT} は既に使用されています。"
+        echo ""
+        echo "  以下のコマンドで占用プロセスを確認できます (Windows):"
+        echo "    netstat -ano | findstr \":${PORT}\""
+        echo "    tasklist | findstr \"<PID>\""
+        echo ""
+        exit 1
+    fi
 fi
 
 echo "  管理コンソール : http://127.0.0.1:${PORT}/"
@@ -88,4 +103,4 @@ echo "  Ctrl+C で停止"
 echo "============================================"
 echo ""
 
-exec python -m app
+exec "$PYTHON_BIN" -m app
