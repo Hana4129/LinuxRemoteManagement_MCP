@@ -1,8 +1,8 @@
 """管理コンソール (FastAPI + uvicorn) の起動エントリポイント。
 
-    python -m app          # コンソール
-    python -m app.mcp_entry     # MCP (stdio)
-    python -m app.mcp_http_entry   # MCP (HTTP, 別プロセス)
+    python -m app              # 管理コンソール (専用Webサーバー)
+    python -m app.mcp_entry    # MCP (stdio)
+    python -m app.mcp_http_entry  # MCP (HTTP, 別Webサーバー)
     python -m tools.mock_agent --port 8443   # 開発用モックAgent
 """
 from __future__ import annotations

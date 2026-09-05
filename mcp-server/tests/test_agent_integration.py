@@ -62,7 +62,10 @@ def _build_mcp(tmp_path, mock_agent_url: str, tokens: list[tuple[str, str, str]]
         config_path=tmp_path / "config.yml",
         servers=(ServerConfig(id="dev-web-01", name="Dev Web 01", url=mock_agent_url, env="development"),),
         agent=AgentConfig(timeout_seconds=5.0, tls_verify=False),
-        console=ConsoleConfig(data_dir=str(tmp_path), require_approval=False, approval_ttl_minutes=15, mcp_audit=True),
+        console=ConsoleConfig(
+            data_dir=str(tmp_path), require_approval=False, approval_ttl_minutes=15,
+            mcp_audit=True, auth_required=False,
+        ),
     )
     store = TokenStore(tmp_path / "tokens.db")
     for name, raw, scope in tokens:

@@ -65,7 +65,10 @@ def e2e(tmp_path, mock_agent):
             ServerConfig(id="dev-db-01", name="Dev DB 01", url=mock_agent, env="development"),
         ),
         agent=AgentConfig(timeout_seconds=5.0, tls_verify=False),
-        console=ConsoleConfig(data_dir=str(tmp_path), require_approval=True, approval_ttl_minutes=15, mcp_audit=True),
+        console=ConsoleConfig(
+            data_dir=str(tmp_path), require_approval=True, approval_ttl_minutes=15,
+            mcp_audit=True, auth_required=False,
+        ),
     )
     store = TokenStore(tmp_path / "tokens.db")
     # readonlyトークンは1つで両サーバーをカバー (同一生トークンの二重登録は hash UNIQUE 違反)

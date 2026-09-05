@@ -2,6 +2,8 @@
 
 本ドキュメントは、Linux Remote Management MCP のセキュリティレベル（Level 1〜3）別構成と、本実装がどのレベル要件を満たすかを定義する。
 
+複数ユーザーの本番運用では、MCP利用者の認証・認可と、MCP ServerからLinux Agentへのサービス間認証を分離する。既存のAgent側Token実装は二次防御およびLevel 1/2向けであり、利用者ごとの権限管理を実現するものではない。
+
 ---
 
 ## Level 1 — 最小構成
@@ -61,6 +63,13 @@ Audit Log
 - ✅ Audit Log: JSONL 構造化ログ（0600 パーミッション）、MCP 監査ログ（actor 記録）
 - ✅ Rate Limit: クライアント IP 単位（token bucket、429 応答）
 - ✅ Human Approval: 操作前に承認フロー（operator スコープの restart/execute）
+
+**複数ユーザー運用の計画**:
+- ⏳ 管理コンソールの管理者認証を必須化し、管理者principalを監査に記録する
+- ⏳ MCP利用者をOIDC/SSOまたは個別API credentialで識別する
+- ⏳ principal/roleごとのserver・scope・操作権限を管理する
+- ⏳ 管理ツールからgrant/revokeを実行し、Agentへ失効を反映する
+- ⏳ 承認要求と監査ログに認証済みprincipalを記録する
 
 ---
 
@@ -128,10 +137,10 @@ SIEM
 | Rate Limit (Agent) | - | ✅ | ✅ | ✅ 実装済み |
 | Rate Limit (MCP Server) | - | ✅ | ✅ | ✅ 実装済み |
 | Human Approval | - | ✅ | ✅ | ✅ 実装済み |
-| Policy Engine | - | - | ✅ | ✅ 実装済み |
+| Policy Engine | - | - | ✅ | ⚠️ Agent側scope/policyのみ。ユーザー単位は未実装 |
 | mTLS | - | - | ✅ | ✅ 実装済み |
 | SIEM | - | - | ✅ | ✅ 実装済み |
-| Token Rotation | - | - | ✅ | ✅ 実装済み |
+| Token Rotation | - | - | ✅ | ⚠️ MCP Server内の管理。Agent反映は未実装 |
 | Immutable Log | - | - | ✅ | ✅ 実装済み |
 
 ---

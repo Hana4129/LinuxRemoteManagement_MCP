@@ -16,6 +16,7 @@
     <nav class="tabs">
       <button class="tab active" data-tab="nodes" type="button">Nodes</button>
       <button class="tab" data-tab="tokens" type="button">MCP Tokens</button>
+      <button class="tab" data-tab="access" type="button">Access</button>
       <button class="tab" data-tab="approvals" type="button">Approvals</button>
       <button class="tab" data-tab="help" type="button">Help</button>
     </nav>
@@ -43,6 +44,34 @@
         </table>
       </div>
       <p class="hint">"Not installed / Agent not running" means TCP RST on the Agent port. Unreachable = network unreachable.</p>
+    </section>
+
+    <section id="tab-access" class="tab-panel">
+      <div class="toolbar">
+        <div id="principal-summary" class="summary"></div>
+        <div class="toolbar-actions">
+          <button id="open-principal-dialog" class="btn primary" type="button">Add Principal</button>
+          <button id="reload-principals" class="btn" type="button">Refresh</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="principals">
+          <thead><tr><th>Subject</th><th>Name</th><th>Role</th><th>Status</th><th>Permissions</th><th>Actions</th></tr></thead>
+          <tbody id="principals-tbody"><tr><td colspan="6" class="loading">Loading...</td></tr></tbody>
+        </table>
+      </div>
+      <div class="help-card access-card">
+        <h2>Agent credentials</h2>
+        <p class="hint">Agent credentials are service credentials, separate from user MCP tokens. The raw value is submitted once and never displayed.</p>
+        <form id="agent-credential-form" class="inline-form">
+          <input id="agent-server-id" placeholder="Server ID" required>
+          <input id="agent-credential-name" placeholder="Credential name" required>
+          <input id="agent-token-id" placeholder="Agent token ID" required>
+          <input id="agent-token" type="password" placeholder="Agent token" required>
+          <button class="btn primary" type="submit">Register</button>
+        </form>
+        <div class="table-wrap compact"><table><thead><tr><th>Name</th><th>Server</th><th>Agent token ID</th><th>Status</th><th>Actions</th></tr></thead><tbody id="agent-credentials-tbody"><tr><td colspan="5" class="loading">Loading...</td></tr></tbody></table></div>
+      </div>
     </section>
 
     <section id="tab-tokens" class="tab-panel">
@@ -131,6 +160,16 @@
     </form>
   </dialog>
 
+  <dialog id="principal-dialog" class="dialog">
+    <form method="dialog" id="principal-form">
+      <h2>Add Principal</h2>
+      <div class="field"><label>OIDC subject</label><input id="p-subject" required placeholder="user@example.com"></div>
+      <div class="field"><label>Display name</label><input id="p-name" required></div>
+      <div class="field"><label>Role</label><select id="p-role"><option value="viewer">viewer</option><option value="operator">operator</option><option value="admin">admin</option></select></div>
+      <div class="dialog-actions"><button type="reset" class="btn">Cancel</button><button type="submit" class="btn primary">Create</button></div>
+    </form>
+  </dialog>
+
   <dialog id="token-result" class="dialog">
     <div class="result">
       <h2>Token Issued</h2>
@@ -184,6 +223,6 @@
   </dialog>
 
   <div id="toast"></div>
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v={{ version }}"></script>
 </body>
 </html>

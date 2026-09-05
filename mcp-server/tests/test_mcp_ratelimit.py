@@ -32,6 +32,7 @@ def app_config(tmp_dir: Path) -> AppConfig:
             mcp_audit=False,
             rate_limit_per_minute=60,
             rate_limit_burst=5,
+            auth_required=False,
         ),
     )
 
@@ -106,6 +107,7 @@ class TestRateLimitMiddleware:
                 mcp_audit=False,
                 rate_limit_per_minute=60,
                 rate_limit_burst=3,
+                auth_required=False,
             ),
         )
         app = create_app(app_config, store=store)
@@ -128,6 +130,7 @@ class TestRateLimitMiddleware:
                 mcp_audit=False,
                 rate_limit_per_minute=0,
                 rate_limit_burst=0,
+                auth_required=False,
             ),
         )
         app = create_app(app_config, store=store)

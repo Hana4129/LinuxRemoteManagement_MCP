@@ -1,0 +1,23 @@
+[Unit]
+Description=Linux Remote Management MCP Console
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=linux-mcp
+Group=linux-mcp
+WorkingDirectory=/opt/linux-remote-management-mcp/mcp-server
+EnvironmentFile=/etc/linux-mcp-server/env
+ExecStart=/opt/linux-remote-management-mcp/mcp-server/.venv/bin/python -m app
+Restart=on-failure
+RestartSec=5
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/linux-remote-management-mcp/mcp-server/data
+
+[Install]
+WantedBy=multi-user.target

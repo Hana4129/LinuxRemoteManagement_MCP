@@ -123,6 +123,7 @@ func (a *Agent) Reload(cfg *config.Config) {
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	a.cfg = cfg
 
 	// 認可判定は新しい Engine に対して行う (新旧トークン混在を防ぐ)
 	for _, t := range cfg.Agent.Tokens {
@@ -166,13 +167,52 @@ func (a *Agent) Handler() http.Handler {
 	mux.HandleFunc("/v1/services/", a.handleServices)
 	mux.HandleFunc("/v1/files", a.handleFiles)
 	mux.HandleFunc("/v1/execute", a.handleExecute)
+	mux.HandleFunc("/v1/admin/tokens/", a.handleAdminToken)
 	mux.HandleFunc("/metrics", handleMetrics)
 	return a.middlewareStack(mux)
+}
+
+func (a *Agent) handleAdminToken(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost || a.cfg.Agent.AdminTokenHash == "" {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+		return
+	}
+	raw := r.Header.Get("X-LRM-Admin-Token")
+	h := sha256.Sum256([]byte(raw))
+	if subtle.ConstantTimeCompare([]byte(hex.EncodeToString(h[:])), []byte(a.cfg.Agent.AdminTokenHash)) != 1 {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	tokenID := strings.TrimPrefix(r.URL.Path, "/v1/admin/tokens/")
+	if tokenID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "token id required"})
+		return
+	}
+	a.mu.Lock()
+	token, ok := a.tokens[tokenID]
+	if ok {
+		token.Disabled = true
+		a.tokens[tokenID] = token
+	}
+	a.mu.Unlock()
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "token not found"})
+		return
+	}
+	if policyToken := a.engine.GetToken(tokenID); policyToken != nil {
+		policyToken.Disabled = true
+	}
+	a.auditLog.Log("admin", "token_revoke", tokenID, "ok", "", clientIP(r))
+	writeJSON(w, http.StatusOK, map[string]interface{}{"revoked": true, "token_id": tokenID})
 }
 func (a *Agent) middlewareStack(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		IncrementRequests()
 		if r.URL.Path == "/metrics" || r.URL.Path == "/v1/health" {
+			h.ServeHTTP(w, r)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/v1/admin/tokens/") {
 			h.ServeHTTP(w, r)
 			return
 		}

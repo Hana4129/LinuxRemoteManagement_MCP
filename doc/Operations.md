@@ -26,6 +26,47 @@ cp config.yml.example config.yml
 python -m app
 ```
 
+管理コンソールとMCP HTTPは別プロセスで起動する。
+
+```bash
+# MCP streamable HTTP (config.yml の mcp.host / mcp.port)
+python -m app.mcp_http_entry
+```
+
+stdioを利用する場合は、利用者ごとに発行したMCP tokenを環境変数へ設定する。
+
+```bash
+export LINUX_MCP_TOKEN="<issued-token>"
+python -m app.mcp_entry
+```
+
+### 1.4 systemdでの分離起動
+
+本番Linuxでは、管理コンソールとMCP HTTPを別unitとして起動する。
+
+```bash
+sudo useradd --system --home /opt/linux-remote-management-mcp --shell /usr/sbin/nologin linux-mcp
+sudo install -d -o linux-mcp -g linux-mcp -m 700 /opt/linux-remote-management-mcp/mcp-server/data
+sudo install -d -m 700 /etc/linux-mcp-server
+sudo install -m 600 mcp-server/scripts/env.example /etc/linux-mcp-server/env
+# /etc/linux-mcp-server/env の秘密を本番値へ変更
+sudo install -m 644 mcp-server/scripts/linux-mcp-console.service /etc/systemd/system/
+sudo install -m 644 mcp-server/scripts/linux-mcp-http.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now linux-mcp-console.service linux-mcp-http.service
+```
+
+状態確認:
+
+```bash
+systemctl status linux-mcp-console.service
+systemctl status linux-mcp-http.service
+journalctl -u linux-mcp-console.service -f
+journalctl -u linux-mcp-http.service -f
+```
+
+`env.example` はテンプレートであり、実際の秘密をリポジトリへ保存しない。管理コンソールとMCP HTTPは異なるfirewall ruleまたはreverse proxy locationで公開する。
+
 ### 1.3 Linux Agent セットアップ
 
 ```bash

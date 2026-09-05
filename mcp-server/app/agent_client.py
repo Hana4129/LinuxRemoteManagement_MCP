@@ -14,6 +14,7 @@ import httpx
 
 from .config import ServerConfig
 from .db import TokenStore
+from .auth import current_token
 
 __all__ = ["AgentClient", "AgentResult", "AgentError"]
 
@@ -91,6 +92,18 @@ class AgentClient:
         await self.aclose()
 
     def _token_for(self, server_id: str, scope: str | None = None):
+        principal = current_token()
+        if principal is not None:
+            if server_id not in principal.server_ids and "*" not in principal.server_ids:
+                return None
+            if scope is not None and principal.scope != scope:
+                return None
+            if principal.principal_id and not self._store.has_permission(principal.principal_id, server_id, scope or principal.scope):
+                return None
+            return principal
+        agent_credential = self._store.find_agent_credential(server_id)
+        if agent_credential is not None:
+            return agent_credential
         return self._store.find_token_for_server(server_id, scope=scope)
 
     async def request(

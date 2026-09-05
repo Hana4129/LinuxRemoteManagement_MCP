@@ -81,6 +81,25 @@ Authorization
 「何を実行してよいか」
 ```
 
+## 複数ユーザー運用での認証境界
+
+本番運用では、次の3つの認証を混同しない。
+
+```text
+管理者 ── OIDC/SSO ──> 管理コンソール
+利用者 ── OIDC/SSO または MCP用API credential ──> MCP Server
+MCP Server ── mTLS + 短期agent credential ──> Linux Agent
+```
+
+管理コンソールとMCP HTTPは別のWebサーバー（別プロセス・別listen先）として配置する。管理コンソールは社内管理ネットワークに限定し、MCP HTTPは利用者が接続するネットワーク境界で公開する。両者を同一ポートのパス分岐だけで公開しない。
+
+* 管理コンソールの認証は、ユーザー管理・権限付与・失効を行う管理者の認証である。
+* MCP利用者の認証は、Tool呼び出しを行った人またはサービス主体を識別するためのものである。
+* Agent接続用credentialは、MCP ServerがAgentへ接続するためのサービス間認証であり、MCP利用者のcredentialとして再利用しない。
+* consoleのlisten先を社内ネットワークに限定することは必須だが、それだけを認証の代替にしない。
+* 認証情報が設定されていない状態で管理APIを公開してはならず、本番起動時に失敗させる。
+* `auth_mode=oidc` では署名、issuer、audience、expを検証し、事前登録されたOIDC `sub` だけをprincipalとして受け入れる。
+
 ---
 
 # 3. コンポーネント
@@ -202,6 +221,8 @@ API Token
 
 という二重の認証にできる。
 
+本番では、mTLSをMCP Serverの身元確認に使用し、Agent接続用credentialは短い有効期限を持つ署名済みcredentialとする。長期Bearer TokenをMCP利用者へ直接配布したり、複数利用者で共有したりしない。
+
 ---
 
 # 6. API Token
@@ -316,6 +337,37 @@ Token
        ├── systemctl restart nginx
        └── journalctl
 ```
+
+## 9.1 複数ユーザーの認可
+
+MCP利用者の認証後、MCP Serverは次のポリシーを評価する。
+
+```text
+Principal (user/service account)
+    └── Role / Group
+      └── Permission
+        ├── server_id
+        ├── scope (readonly/operator)
+        └── allowed operations
+```
+
+最低限、以下の情報を管理する。
+
+* `principals`: ユーザーまたはサービス主体の識別子、状態、所属
+* `roles`: 管理者、運用者、閲覧者などの役割
+* `permissions`: principal/roleごとのserver、scope、操作範囲
+* `agent_credentials`: MCP ServerとAgent間だけで使用するcredential
+* `audit_actor`: 認証済みprincipal、承認者、実行対象を紐付けた監査主体
+
+Tool呼び出しごとに、対象serverと操作がpermissionに含まれることを確認する。Agent側のreadonly/operator policyは二次防御として維持し、MCP Server側の認可を代替しない。
+
+実装上、`principals`、`permissions`、`agent_credentials` はMCP ServerのSQLite内で別テーブルとして管理する。MCP tokenの失効は直ちにMCP入口で拒否し、Agent credentialの失効はMCP Serverからの次回接続に使用しない。Agentへ直接到達できる経路を許可しないことをネットワーク境界の必須条件とする。
+
+Agent credentialの失効時は、MCP ServerがAgentの `POST /v1/admin/tokens/{agent_token_id}/revoke` を呼び出す。Agentは通常のBearer tokenとは別の管理secretと、可能な構成ではmTLSクライアント証明書を要求する。Agent側で無効化されたtokenは、設定ファイルの次回reloadを待たずに認証拒否される。同期に失敗した場合、MCP Server側のcredentialも失効済みとせず、運用者へエラーを返す。
+
+管理ツールは、管理権限を持つprincipalだけがpermissionのgrant/revokeを実行できるようにする。revokeは新規Tool呼び出しを即時拒否し、Agent側のcredentialにも短い有効期限、失効リストの同期、またはintrospectionによって反映する。
+
+承認要求にはリクエストしたprincipalを保存し、承認APIはリクエスト本文の任意の文字列を承認者名として信用しない。承認者は管理コンソールで認証されたprincipalから決定する。
 
 ---
 
@@ -972,6 +1024,14 @@ SIEM
 * Alerting
 * Immutable audit log
 
+複数ユーザーの本番運用では、次も必須とする。
+
+* 管理コンソールの管理者認証とMCP利用者認証の分離
+* principal/role単位のserver・scope・操作権限
+* 管理ツールからのgrant/revokeと監査記録
+* revoke/rotationのAgentへの反映
+* 監査ログ上の利用者・承認者の正確な識別
+
 を追加する。
 
 ---
@@ -994,8 +1054,8 @@ Transport
     HTTPS
 
 Authentication
-    API Token
-    + optional mTLS
+  OIDC/SSO for users
+  + mTLS and short-lived credential for Agent connection
 
 Network
     Tailscale / WireGuard

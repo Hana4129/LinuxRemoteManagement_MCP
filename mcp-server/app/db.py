@@ -40,6 +40,37 @@ CREATE TABLE IF NOT EXISTS tokens (
     created_by    TEXT,
     rotated_from  TEXT,
     grace_ends_at TEXT
+    ,principal_id TEXT
+);
+
+CREATE TABLE IF NOT EXISTS principals (
+    id            TEXT PRIMARY KEY,
+    subject       TEXT NOT NULL UNIQUE,
+    display_name  TEXT NOT NULL,
+    role          TEXT NOT NULL DEFAULT 'viewer',
+    enabled       INTEGER NOT NULL DEFAULT 1,
+    created_at    TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS permissions (
+    principal_id  TEXT NOT NULL,
+    server_id     TEXT NOT NULL,
+    scope         TEXT NOT NULL,
+    enabled       INTEGER NOT NULL DEFAULT 1,
+    created_at    TEXT NOT NULL,
+    PRIMARY KEY (principal_id, server_id, scope),
+    FOREIGN KEY (principal_id) REFERENCES principals(id)
+);
+
+CREATE TABLE IF NOT EXISTS agent_credentials (
+    id            TEXT PRIMARY KEY,
+    server_id     TEXT NOT NULL,
+    name          TEXT NOT NULL,
+    agent_token_id TEXT NOT NULL DEFAULT '',
+    token_raw     TEXT NOT NULL,
+    created_at    TEXT NOT NULL,
+    expires_at    TEXT,
+    enabled       INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS token_rotations (
@@ -77,6 +108,7 @@ class TokenRecord:
     created_by: str | None = None
     rotated_from: str | None = None
     grace_ends_at: str | None = None
+    principal_id: str | None = None
 
     @property
     def expired(self) -> bool:
@@ -102,10 +134,47 @@ class TokenRecord:
             "created_by": self.created_by,
             "rotated_from": self.rotated_from,
             "grace_ends_at": self.grace_ends_at,
+            "principal_id": self.principal_id,
         }
         if include_token:
             data["token"] = self.token_raw
         return data
+
+
+@dataclass
+class AgentCredential:
+    id: str
+    server_id: str
+    name: str
+    agent_token_id: str
+    token_raw: str
+    created_at: str
+    expires_at: str | None
+    enabled: bool
+
+    @property
+    def active(self) -> bool:
+        return self.enabled and not is_expired(self.expires_at)
+
+    @property
+    def server_ids(self) -> list[str]:
+        return [self.server_id]
+
+    @property
+    def scope(self) -> str:
+        return "operator"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "server_id": self.server_id,
+            "name": self.name,
+            "agent_token_id": self.agent_token_id,
+            "created_at": self.created_at,
+            "expires_at": self.expires_at,
+            "enabled": self.enabled,
+            "active": self.active,
+        }
 
 
 class TokenStore:
@@ -129,6 +198,11 @@ class TokenStore:
             conn.execute("ALTER TABLE tokens ADD COLUMN rotated_from TEXT")
         if "grace_ends_at" not in existing:
             conn.execute("ALTER TABLE tokens ADD COLUMN grace_ends_at TEXT")
+        if "principal_id" not in existing:
+            conn.execute("ALTER TABLE tokens ADD COLUMN principal_id TEXT")
+        credential_columns = {row["name"] for row in conn.execute("PRAGMA table_info(agent_credentials)")}
+        if credential_columns and "agent_token_id" not in credential_columns:
+            conn.execute("ALTER TABLE agent_credentials ADD COLUMN agent_token_id TEXT NOT NULL DEFAULT ''")
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, timeout=10)
@@ -154,6 +228,7 @@ class TokenStore:
             created_by=row["created_by"],
             rotated_from=row["rotated_from"],
             grace_ends_at=row["grace_ends_at"],
+            principal_id=row["principal_id"],
         )
 
     def create_token(
@@ -165,6 +240,7 @@ class TokenStore:
         expires_in_days: int | None = None,
         expires_at: str | None = None,
         created_by: str | None = None,
+        principal_id: str | None = None,
     ) -> tuple[TokenRecord, str]:
         """新しいトークンを発行する。生トークン文字列をタプルで一緒に返す (一度きり表示用)。"""
         raw = generate_token()
@@ -176,6 +252,7 @@ class TokenStore:
             expires_in_days=expires_in_days,
             expires_at=expires_at,
             created_by=created_by,
+            principal_id=principal_id,
             store_raw=True,
         )
         record.token_raw = raw
@@ -192,6 +269,7 @@ class TokenStore:
         expires_at: str | None = None,
         created_by: str | None = None,
         store_raw: bool = False,
+        principal_id: str | None = None,
     ) -> TokenRecord:
         normalized = sorted({str(sid) for sid in server_ids})
         if not normalized:
@@ -203,8 +281,8 @@ class TokenStore:
                     conn.execute(
                         "INSERT INTO tokens "
                         "(id, name, token_raw, token_hash, prefix, server_ids, scope, "
-                        "created_at, expires_at, last_used_at, enabled, created_by) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)",
+                        "created_at, expires_at, last_used_at, enabled, created_by, principal_id) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
                         (
                             token_id,
                             name,
@@ -217,6 +295,7 @@ class TokenStore:
                             expires_at or expiry_iso(expires_in_days),
                             None,
                             created_by,
+                            principal_id,
                         ),
                     )
                 break
@@ -274,6 +353,121 @@ class TokenStore:
                 conn.execute("UPDATE tokens SET last_used_at = ? WHERE id = ?", (now_iso(), token_id))
         except sqlite3.Error:
             pass
+
+    def grant_permission(self, principal_id: str, server_id: str, scope: str) -> None:
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "INSERT INTO permissions (principal_id, server_id, scope, created_at) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(principal_id, server_id, scope) DO UPDATE SET enabled=1",
+                (principal_id, server_id, scope, now_iso()),
+            )
+
+    def revoke_permission(self, principal_id: str, server_id: str, scope: str) -> bool:
+        with self._lock, self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE permissions SET enabled=0 WHERE principal_id=? AND server_id=? AND scope=? AND enabled=1",
+                (principal_id, server_id, scope),
+            )
+            return cur.rowcount > 0
+
+    def has_permission(self, principal_id: str, server_id: str, scope: str) -> bool:
+        with self._lock, self._connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM permissions WHERE principal_id=? AND enabled=1 "
+                "AND (server_id=? OR server_id='*') AND scope=? LIMIT 1",
+                (principal_id, server_id, scope),
+            ).fetchone()
+        return row is not None
+
+    def principal_active(self, principal_id: str) -> bool:
+        with self._lock, self._connect() as conn:
+            row = conn.execute("SELECT 1 FROM principals WHERE id=? AND enabled=1", (principal_id,)).fetchone()
+        return row is not None
+
+    def create_agent_credential(
+        self, server_id: str, name: str, raw: str, agent_token_id: str = "", expires_in_days: int | None = None
+    ) -> AgentCredential:
+        credential_id = "agt_" + secrets.token_hex(8)
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "INSERT INTO agent_credentials (id, server_id, name, agent_token_id, token_raw, created_at, expires_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (credential_id, server_id, name, agent_token_id, raw, now_iso(), expiry_iso(expires_in_days)),
+            )
+        return self.get_agent_credential(credential_id)  # type: ignore[return-value]
+
+    def get_agent_credential(self, credential_id: str) -> AgentCredential | None:
+        with self._lock, self._connect() as conn:
+            row = conn.execute("SELECT * FROM agent_credentials WHERE id=?", (credential_id,)).fetchone()
+        return self._row_to_agent_credential(row) if row else None
+
+    def find_agent_credential(self, server_id: str) -> AgentCredential | None:
+        with self._lock, self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM agent_credentials WHERE server_id=? AND enabled=1 "
+                "ORDER BY created_at DESC LIMIT 1",
+                (server_id,),
+            ).fetchone()
+        credential = self._row_to_agent_credential(row) if row else None
+        return credential if credential and credential.active else None
+
+    def list_agent_credentials(self) -> list[AgentCredential]:
+        with self._lock, self._connect() as conn:
+            rows = conn.execute("SELECT * FROM agent_credentials ORDER BY created_at DESC").fetchall()
+        return [self._row_to_agent_credential(row) for row in rows]
+
+    def revoke_agent_credential(self, credential_id: str) -> bool:
+        with self._lock, self._connect() as conn:
+            cur = conn.execute("UPDATE agent_credentials SET enabled=0 WHERE id=? AND enabled=1", (credential_id,))
+            return cur.rowcount > 0
+
+    @staticmethod
+    def _row_to_agent_credential(row: sqlite3.Row) -> AgentCredential:
+        return AgentCredential(
+            id=row["id"], server_id=row["server_id"], name=row["name"], agent_token_id=row["agent_token_id"], token_raw=row["token_raw"],
+            created_at=row["created_at"], expires_at=row["expires_at"], enabled=bool(row["enabled"]),
+        )
+
+    def list_permissions(self, principal_id: str | None = None) -> list[dict[str, Any]]:
+        query = "SELECT principal_id, server_id, scope, enabled, created_at FROM permissions"
+        params: tuple[str, ...] = ()
+        if principal_id:
+            query += " WHERE principal_id=?"
+            params = (principal_id,)
+        with self._lock, self._connect() as conn:
+            return [dict(row) for row in conn.execute(query + " ORDER BY principal_id, server_id, scope", params)]
+
+    def create_principal(self, subject: str, display_name: str, role: str = "viewer") -> dict[str, Any]:
+        principal_id = "prn_" + secrets.token_hex(8)
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "INSERT INTO principals (id, subject, display_name, role, created_at) VALUES (?, ?, ?, ?, ?)",
+                (principal_id, subject, display_name, role, now_iso()),
+            )
+        return self.get_principal(principal_id) or {}
+
+    def get_principal(self, principal_id: str) -> dict[str, Any] | None:
+        with self._lock, self._connect() as conn:
+            row = conn.execute("SELECT * FROM principals WHERE id=?", (principal_id,)).fetchone()
+        return dict(row) if row else None
+
+    def get_principal_by_subject(self, subject: str) -> dict[str, Any] | None:
+        with self._lock, self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM principals WHERE subject=? AND enabled=1", (subject,)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def list_principals(self) -> list[dict[str, Any]]:
+        with self._lock, self._connect() as conn:
+            return [dict(row) for row in conn.execute("SELECT * FROM principals ORDER BY created_at")]
+
+    def disable_principal(self, principal_id: str) -> bool:
+        with self._lock, self._connect() as conn:
+            cur = conn.execute("UPDATE principals SET enabled=0 WHERE id=? AND enabled=1", (principal_id,))
+            conn.execute("UPDATE tokens SET enabled=0 WHERE principal_id=?", (principal_id,))
+            conn.execute("UPDATE permissions SET enabled=0 WHERE principal_id=?", (principal_id,))
+            return cur.rowcount > 0
 
     def find_token_for_server(self, server_id: str, scope: str | None = None) -> TokenRecord | None:
         """指定サーバーで利用可能な最新の有効トークンを返す。"*" は全サーバーを意味する。"""
@@ -337,8 +531,8 @@ class TokenStore:
                         """
                         INSERT INTO tokens
                         (id, name, token_raw, token_hash, prefix, server_ids, scope,
-                         created_at, expires_at, enabled, created_by, rotated_from, grace_ends_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL, NULL)
+                         created_at, expires_at, enabled, created_by, rotated_from, grace_ends_at, principal_id)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL, NULL, ?)
                         """,
                         (
                             new_token_id,
@@ -351,6 +545,7 @@ class TokenStore:
                             now,
                             new_expires,
                             rotated_by,
+                            old_record.principal_id,
                         ),
                     )
                     break

@@ -5,8 +5,8 @@ from __future__ import annotations
 import base64
 import logging
 import secrets
-from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import HTMLResponse
@@ -14,52 +14,72 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from . import __version__
-from .api import approvals_router, meta_router, nodes_router, servers_router, tokens_router
+from .api import (
+    agent_credentials_router,
+    approvals_router,
+    meta_router,
+    nodes_router,
+    principals_router,
+    servers_router,
+    tokens_router,
+)
+from .auth import current_principal, reset_current_principal, set_current_principal
 from .approvals import ApprovalStore
 from .config import AppConfig, load_config
 from .db import TokenStore
 from .mcp_audit import McpAudit
 from .mcp_ratelimit import RateLimiter
+from .oidc import OidcError, OidcValidator
 
 logger = logging.getLogger("linux_mcp")
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
-def _mount_mcp_http(app: FastAPI, config: AppConfig, store: TokenStore,
-                    approvals: ApprovalStore | None, audit: McpAudit | None) -> None:
-    """FastMCP の streamable HTTP をコンソールへベストエフォートでマウントする。
-
-    fastmcp 3.x では StarletteWithLifespan が持つセッション管理のライフタイムを
-    外部アプリから確実に駆動できない場合があるため、失敗してもコンソールは動作する
-    (フォールバック: `python -m app.mcp_http_entry` で別プロセス起動)。
-    """
-    if not config.console.mcp_http:
-        app.state.mcp_http_enabled = False
-        return
-    try:
-        from .mcp_server import build_mcp
-
-        mcp = build_mcp(config, store, approvals=approvals, audit=audit)
-        asgi = mcp.http_app(transport="streamable-http", json_response=True, path="/")
-    except Exception as exc:  # noqa: BLE001 - fastmcp未対応版では無視
-        logger.warning("MCP streamable HTTP マウントをスキップ: %s", exc)
-        app.state.mcp_http_enabled = False
-        return
-    app.mount(config.console.mcp_http_path, asgi)
-    app.state.mcp_instance = mcp
-    app.state.mcp_http_enabled = True
-
-
 def _maybe_basic_auth(app: FastAPI, config: AppConfig) -> None:
-    if not (config.console.username and config.console.password):
+    if not config.console.auth_required:
         return
+    if config.console.auth_mode == "oidc":
+        validator = OidcValidator(
+            config.console.oidc_issuer,
+            config.console.oidc_audience,
+            config.console.oidc_jwks_url,
+        )
+
+        @app.middleware("http")
+        async def _oidc_auth(request: Request, call_next):
+            header = request.headers.get("Authorization", "")
+            if not header.startswith("Bearer "):
+                return Response(status_code=401, content="OIDC Bearer token required")
+            try:
+                claims = validator.validate(header[7:].strip())
+            except OidcError:
+                return Response(status_code=401, content="Invalid OIDC token")
+            principal = request.app.state.store.get_principal_by_subject(str(claims["sub"]))
+            if principal is None:
+                return Response(status_code=403, content="OIDC subject is not provisioned")
+            context = set_current_principal(principal)
+            try:
+                request.state.principal = principal
+                return await call_next(request)
+            finally:
+                reset_current_principal(context)
+        return
+    if not (config.console.username and config.console.password):
+        raise ValueError("console.auth_required=true ですが username/password が未設定です")
     expected = "Basic " + base64.b64encode(
         f"{config.console.username}:{config.console.password}".encode("utf-8")
     ).decode("ascii")
 
     @app.middleware("http")
     async def _basic_auth(request: Request, call_next):
+        if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+            origin = request.headers.get("Origin")
+            if origin:
+                origin_parts = urlsplit(origin)
+                request_origin = f"{request.url.scheme}://{request.url.netloc}"
+                if f"{origin_parts.scheme}://{origin_parts.netloc}" != request_origin:
+                    return Response(status_code=403, content="Cross-origin mutation rejected")
         provided = request.headers.get("Authorization", "")
         if not secrets.compare_digest(provided, expected):
             return Response(
@@ -67,7 +87,21 @@ def _maybe_basic_auth(app: FastAPI, config: AppConfig) -> None:
                 headers={"WWW-Authenticate": 'Basic realm="linux-mcp-console"'},
                 content="401 Unauthorized",
             )
-        return await call_next(request)
+        principal_context = set_current_principal(
+            {
+                "id": "basic-admin",
+                "subject": config.console.username,
+                "display_name": config.console.username,
+                "role": "admin",
+                "enabled": 1,
+                "auth_method": "basic",
+            }
+        )
+        try:
+            request.state.principal = current_principal()
+            return await call_next(request)
+        finally:
+            reset_current_principal(principal_context)
 
 
 def _maybe_approval_store(config: AppConfig) -> ApprovalStore | None:
@@ -123,19 +157,7 @@ def create_app(config: AppConfig | None = None, store: TokenStore | None = None)
     approvals = _maybe_approval_store(config)
     audit = _maybe_audit(config)
 
-    @asynccontextmanager
-    async def lifespan(app: FastAPI):
-        mcp = getattr(app.state, "mcp_instance", None)
-        session_manager = None
-        if mcp is not None:
-            session_manager = getattr(mcp, "_session_manager", None) or getattr(mcp, "session_manager", None)
-        if session_manager is not None:
-            async with session_manager.run():
-                yield
-        else:
-            yield
-
-    app = FastAPI(title="Linux Remote Management MCP Server", version=__version__, lifespan=lifespan)
+    app = FastAPI(title="Linux Remote Management Console", version=__version__)
     app.state.config = config
     app.state.store = store
     app.state.approvals = approvals
@@ -145,6 +167,8 @@ def create_app(config: AppConfig | None = None, store: TokenStore | None = None)
     app.include_router(meta_router)
     app.include_router(nodes_router)
     app.include_router(tokens_router)
+    app.include_router(principals_router)
+    app.include_router(agent_credentials_router)
     app.include_router(servers_router)
     # 承認APIは require_approval=False でも常設する (無効時は各エンドポイントが503を返す)
     app.include_router(approvals_router)
@@ -162,7 +186,6 @@ def create_app(config: AppConfig | None = None, store: TokenStore | None = None)
     app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
     _maybe_basic_auth(app, config)
     _maybe_rate_limit(app, config)
-    _mount_mcp_http(app, config, store, approvals=approvals, audit=audit)
 
     logger.info(
         "Linux Remote Management MCP Server v%s ready (servers=%d)", __version__, len(config.servers)

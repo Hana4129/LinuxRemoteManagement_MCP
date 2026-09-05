@@ -55,12 +55,15 @@ export PATH=$PATH:/usr/local/go/bin
 go version
 ```
 
-### 2. 管理コンソール + MCP HTTP サーバー起動
+### 2. 管理コンソールとMCP HTTPサーバー起動
 
 ```bash
 python -m app
 # → http://127.0.0.1:8080/ で社内管理コンソール
-# → http://127.0.0.1:8080/mcp で MCP streamable HTTP
+
+# 別プロセスで起動
+python -m app.mcp_http_entry
+# → http://127.0.0.1:8090/ で MCP streamable HTTP
 ```
 
 ### 3. MCP (stdio) クライアント設定

@@ -35,6 +35,7 @@ from fastmcp import FastMCP
 
 from .agent_client import AgentClient, AgentResult
 from .approvals import ApprovalError, ApprovalStore
+from .auth import current_token
 from .config import AppConfig, ServerConfig
 from .db import TokenStore
 from .mcp_audit import McpAudit
@@ -72,10 +73,19 @@ def build_mcp(
         server = config.server(server_id)
         if server is None:
             raise ValueError(f"未知のサーバーID: {server_id!r} (登録済み: {config.server_ids})")
+        principal = current_token()
+        if principal is not None and server_id not in principal.server_ids and "*" not in principal.server_ids:
+            raise PermissionError(f"principal {principal.name!r} はサーバー {server_id!r} にアクセスできません")
+        if principal is not None and principal.principal_id:
+            if not store.has_permission(principal.principal_id, server_id, principal.scope):
+                raise PermissionError(f"principal {principal.name!r} はサーバー {server_id!r} に権限がありません")
         return server
 
     def _actor(server_id: str | None) -> str:
-        """監査ログの actor。そのサーバーで使われるトークン名を用いる。"""
+        """監査ログの actor。認証済みMCP主体を用いる。"""
+        principal = current_token()
+        if principal is not None:
+            return f"mcp:{principal.name}"
         if not server_id:
             return "mcp"
         try:
@@ -83,6 +93,17 @@ def build_mcp(
         except Exception:  # noqa: BLE001
             record = None
         return f"mcp:{record.name}" if record is not None else "mcp:unknown"
+
+    def _requester() -> str:
+        """承認要求に保存する認証済みMCP主体。"""
+        principal = current_token()
+        if principal is None:
+            return "mcp"
+        if principal.principal_id:
+            record = store.get_principal(principal.principal_id)
+            if record is not None:
+                return str(record["subject"])
+        return f"mcp:{principal.name}"
 
     async def _run(
         action: str,
@@ -128,7 +149,12 @@ def build_mcp(
     @mcp.tool
     def list_servers() -> dict:
         """管理対象ノードの一覧を返す。"""
-        servers = [{"id": s.id, "name": s.name, "url": s.url, "env": s.env} for s in config.servers]
+        principal = current_token()
+        servers = [
+            {"id": s.id, "name": s.name, "url": s.url, "env": s.env}
+            for s in config.servers
+            if principal is None or s.id in principal.server_ids or "*" in principal.server_ids
+        ]
         if audit is not None:
             audit.log(actor="mcp", action="list_servers", params={}, ok=True)
         return {"servers": servers}
@@ -214,7 +240,7 @@ def build_mcp(
                 server_id=target.id,
                 service=service,
                 reason=reason,
-                requested_by="mcp",
+                requested_by=_requester(),
                 ttl_minutes=ttl_minutes,
             )
             return {
@@ -251,7 +277,7 @@ def build_mcp(
                     rec = approvals.request(
                         server_id=target.id,
                         service=service,
-                        requested_by="mcp",
+                        requested_by=_requester(),
                         ttl_minutes=ttl_minutes,
                     )
                     return {
@@ -414,7 +440,7 @@ def build_mcp(
                     rec = approvals.request(
                         server_id=target.id,
                         service=service,
-                        requested_by="mcp",
+                        requested_by=_requester(),
                         ttl_minutes=ttl_minutes,
                     )
                     return {

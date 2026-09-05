@@ -38,11 +38,11 @@ def test_create_and_approve_via_api(client):
     http, app = client
     rec = app.state.approvals.request(server_id="dev-web-01", service="nginx", requested_by="mcp")
 
-    res = http.post(f"/api/approvals/{rec.id}/approve", json={"approver": "運用者A", "ttl_minutes": 30})
+    res = http.post(f"/api/approvals/{rec.id}/approve", json={"ttl_minutes": 30})
     assert res.status_code == 200
     body = res.json()
     assert body["status"] == "approved"
-    assert body["approver"] == "運用者A"
+    assert body["approver"] == "console"
     assert body["expires_at"] is not None
 
     # 一覧にも反映される
@@ -53,7 +53,7 @@ def test_create_and_approve_via_api(client):
     entries = app.state.audit.read_entries()
     approve_entries = [e for e in entries if e["action"] == "approve_restart"]
     assert len(approve_entries) == 1
-    assert approve_entries[0]["actor"] == "console:運用者A"
+    assert approve_entries[0]["actor"] == "console:console"
     assert approve_entries[0]["params"]["approval_id"] == rec.id
 
 
@@ -74,7 +74,7 @@ def test_double_approve_returns_409(client):
 def test_reject_flow(client):
     http, app = client
     rec = app.state.approvals.request(server_id="dev-db-01", service="docker")
-    res = http.post(f"/api/approvals/{rec.id}/reject", json={"approver": "運用者B"})
+    res = http.post(f"/api/approvals/{rec.id}/reject", json={})
     assert res.status_code == 200
     assert res.json()["status"] == "rejected"
 
@@ -105,6 +105,7 @@ def test_approvals_disabled_returns_503(tmp_dir: Path, store):
             require_approval=False,
             mcp_audit=True,
             mcp_http=False,
+            auth_required=False,
         ),
     )
     app = create_app(config, store=store)

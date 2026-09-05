@@ -25,6 +25,8 @@ type AgentConfig struct {
 	RateLimit RateLimit       `yaml:"rate_limit"`
 	Audit     AuditConfig     `yaml:"audit"`
 	Execution ExecutionConfig `yaml:"execution"`
+	// AdminTokenHash authenticates the private token-revocation endpoint.
+	AdminTokenHash string `yaml:"admin_token_hash"`
 }
 
 type TLSConfig struct {

@@ -10,15 +10,25 @@ console:
   host: 127.0.0.1          # 社内ネットワークからのみアクセス可なホストで listen すること
   port: 8080
   data_dir: ./data         # tokens.db (SQLite) 保存先
-  mcp_http: true           # MCP streamable HTTP をコンソールにマウントするか
-  # Basic認証を使う場合はコメントを外す。環境変数 LINUX_MCP_CONSOLE_USER / _PASS でも指定可。
+  auth_required: true      # 本番では管理コンソールの認証を必須にする
+  auth_mode: basic         # basic または oidc
+  # username/password または環境変数 LINUX_MCP_CONSOLE_USER / _PASS を必ず設定する。
   # username: admin
   # password: change-me
+
+mcp:
+  host: 127.0.0.1          # MCP利用者から到達可能な社内/VPNネットワークに限定する
+  port: 8090
+  path: /
+  enabled: true
+  stdio_token_env: LINUX_MCP_TOKEN
 
 agent:
   timeout_seconds: 5
   tls_verify: false        # 自己署名証明書の開発環境では false にする
   user_agent: linux-mcp-server/0.1
+  # Agent側の admin_token_hash と対応する秘密。管理endpointの失効同期専用。
+  # admin_token: change-this-sync-secret
   # mTLS: Agent 側でクライアント証明書検証を有効にする場合に設定する
   # client_cert: ./data/client.crt
   # client_key: ./data/client.key

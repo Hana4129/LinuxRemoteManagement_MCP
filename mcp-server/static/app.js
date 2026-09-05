@@ -17,7 +17,7 @@ function fmtDate(iso) {
   if (!iso) return "-";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleString("ja-JP", { year: "numeric", month: 2, day: 2, hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  return d.toLocaleString("ja-JP", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 function esc(s) {
   if (s == null) return "";
@@ -41,6 +41,70 @@ function badgeEnv(env) {
   return `<span class="badge ${cls}">${text}</span>`;
 }
 function humanExp(exp) { if (!exp) return "無期限"; const d = new Date(exp); return Number.isNaN(d.getTime()) ? exp : d.toLocaleDateString("ja-JP"); }
+
+/* ---- access management ---- */
+async function loadPrincipals() {
+  const tb = $("#principals-tbody");
+  if (!tb) return;
+  try {
+    const data = await fetchJSON(API + "/principals");
+    const principals = data.principals || [];
+    const rows = await Promise.all(principals.map(async (p) => {
+      const permissions = await fetchJSON(API + `/principals/${encodeURIComponent(p.id)}/permissions`);
+      return { ...p, permissions: permissions.permissions || [] };
+    }));
+    tb.innerHTML = rows.length ? rows.map(principalRowHtml).join("") : '<tr><td colspan="6" class="loading">0 principals</td></tr>';
+    $("#principal-summary").innerHTML = `<span class="badge badge-enabled">有効: ${rows.filter((p) => p.enabled).length}</span> <span class="badge badge-revoked">合計: ${rows.length}</span>`;
+  } catch (e) { tb.innerHTML = `<tr><td colspan="6" class="loading">${esc(e.message)}</td></tr>`; }
+}
+function principalRowHtml(p) {
+  const perms = p.permissions.length ? p.permissions.map((x) => `${esc(x.server_id)}:${esc(x.scope)}`).join(" ") : "-";
+  const status = p.enabled ? '<span class="badge badge-enabled">有効</span>' : '<span class="badge badge-revoked">無効</span>';
+  const disable = p.enabled ? `<button class="btn danger" data-access-action="disable-principal" data-id="${esc(p.id)}" type="button">無効化</button>` : "";
+  return `<tr><td><code>${esc(p.subject)}</code></td><td>${esc(p.display_name)}</td><td>${esc(p.role)}</td><td>${status}</td><td>${perms}</td><td>${disable} <button class="btn" data-access-action="grant" data-id="${esc(p.id)}" type="button">権限付与</button></td></tr>`;
+}
+async function createPrincipal(e) {
+  e.preventDefault();
+  try {
+    await fetchJSON(API + "/principals", { method: "POST", body: JSON.stringify({ subject: $("#p-subject").value.trim(), display_name: $("#p-name").value.trim(), role: $("#p-role").value }) });
+    $("#principal-dialog").close(); toast("Principalを作成しました", "ok"); loadPrincipals();
+  } catch (err) { toast(err.message, "err"); }
+}
+function grantPrincipal(id) {
+  const serverId = prompt("Server ID (または *):");
+  if (!serverId) return;
+  const scope = prompt("Scope (readonly/operator):", "readonly");
+  if (!["readonly", "operator"].includes(scope)) { toast("scopeが不正です", "err"); return; }
+  fetchJSON(API + `/principals/${encodeURIComponent(id)}/permissions`, { method: "POST", body: JSON.stringify({ server_id: serverId, scope }) })
+    .then(() => { toast("権限を付与しました", "ok"); loadPrincipals(); }).catch((e) => toast(e.message, "err"));
+}
+function disablePrincipal(id) {
+  confirmAction("Principal無効化", "principalと紐付くMCP tokenを無効化しますか。", async () => {
+    try { await fetchJSON(API + `/principals/${encodeURIComponent(id)}/disable`, { method: "POST" }); toast("無効化しました", "ok"); loadPrincipals(); loadTokens(); }
+    catch (e) { toast(e.message, "err"); }
+  });
+}
+async function loadAgentCredentials() {
+  const tb = $("#agent-credentials-tbody");
+  if (!tb) return;
+  try {
+    const data = await fetchJSON(API + "/agent-credentials");
+    tb.innerHTML = (data.credentials || []).map((c) => `<tr><td>${esc(c.name)}</td><td>${esc(c.server_id)}</td><td><code>${esc(c.agent_token_id)}</code></td><td>${c.active ? '<span class="badge badge-enabled">有効</span>' : '<span class="badge badge-revoked">無効</span>'}</td><td>${c.active ? `<button class="btn danger" data-access-action="revoke-agent" data-id="${esc(c.id)}" type="button">失効</button>` : ""}</td></tr>`).join("") || '<tr><td colspan="5" class="loading">0 credentials</td></tr>';
+  } catch (e) { tb.innerHTML = `<tr><td colspan="5" class="loading">${esc(e.message)}</td></tr>`; }
+}
+async function registerAgentCredential(e) {
+  e.preventDefault();
+  try {
+    await fetchJSON(API + "/agent-credentials", { method: "POST", body: JSON.stringify({ server_id: $("#agent-server-id").value.trim(), name: $("#agent-credential-name").value.trim(), agent_token_id: $("#agent-token-id").value.trim(), token: $("#agent-token").value }) });
+    e.target.reset(); toast("Agent credentialを登録しました", "ok"); loadAgentCredentials();
+  } catch (err) { toast(err.message, "err"); }
+}
+function revokeAgentCredential(id) {
+  confirmAction("Agent credential失効", "Agent側にも失効を同期します。続行しますか。", async () => {
+    try { await fetchJSON(API + `/agent-credentials/${encodeURIComponent(id)}/revoke`, { method: "POST" }); toast("失効しました", "ok"); loadAgentCredentials(); }
+    catch (e) { toast(e.message, "err"); }
+  });
+}
 
 /* ---- nodes ---- */
 async function loadNodes() {
@@ -224,7 +288,7 @@ async function doApproveAction(action, id) {
   const doIt = async () => {
     try {
       if (action === "delete") await fetchJSON(API + `/approvals/${id}`, { method: "DELETE" });
-      else await fetchJSON(API + `/approvals/${id}/${action}`, { method: "POST", body: JSON.stringify({ approver: "console" }) });
+      else await fetchJSON(API + `/approvals/${id}/${action}`, { method: "POST", body: JSON.stringify({}) });
       toast(okMsg, "ok"); loadApprovals();
     } catch (e) { toast(e.message, "err"); }
   };
@@ -314,6 +378,20 @@ async function init() {
   }
   $("#reload-tokens").onclick = () => loadTokens();
   $("#open-token-dialog").onclick = () => openIssueDialog();
+  $("#reload-principals").onclick = () => { loadPrincipals(); loadAgentCredentials(); };
+  $("#open-principal-dialog").onclick = () => { $("#principal-form").reset(); $("#principal-dialog").showModal(); };
+  $("#principal-form").onsubmit = createPrincipal;
+  $("#agent-credential-form").onsubmit = registerAgentCredential;
+  $("#principals-tbody").addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-access-action]");
+    if (!btn) return;
+    if (btn.dataset.accessAction === "grant") grantPrincipal(btn.dataset.id);
+    if (btn.dataset.accessAction === "disable-principal") disablePrincipal(btn.dataset.id);
+  });
+  $("#agent-credentials-tbody").addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-access-action=\"revoke-agent\"]");
+    if (btn) revokeAgentCredential(btn.dataset.id);
+  });
   $("#auto-reload").onchange = (e) => { state.auto = e.target.checked; };
   $("#issue-form").onsubmit = submitIssue;
   $("#copy-token").addEventListener("click", async () => {
@@ -328,7 +406,7 @@ async function init() {
     if (btn.dataset.action === "revoke") doRevoke(id);
     else if (btn.dataset.action === "delete") doDelete(id);
   });
-  await Promise.all([loadNodes(), loadTokens(), loadApprovals()]);
+  await Promise.all([loadNodes(), loadTokens(), loadPrincipals(), loadAgentCredentials(), loadApprovals()]);
   startAuto();
   startApprovalAuto();
   const approvalsTbody = $("#approvals-tbody");

@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 
 from . import __version__
 from .agent_client import AgentClient, AgentResult
+from .auth import current_principal
 from .config import ServerConfig
 from .db import TokenStore
 from .status import collect_all_nodes, collect_node_status, summarize_nodes
@@ -32,10 +33,38 @@ from .tokens import SCOPES, now_iso
 
 log = logging.getLogger(__name__)
 
+
+def _require_admin(request: Request) -> None:
+    principal = current_principal()
+    if principal is not None and principal.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="管理者権限が必要です")
+
+
+def _approval_actor(request: Request, fallback: str) -> str:
+    principal = current_principal()
+    if principal is not None:
+        return str(principal.get("subject") or principal.get("id") or "oidc")
+    return fallback
+
+
+def _audit_actor() -> str:
+    principal = current_principal()
+    if principal is None:
+        return "unknown"
+    return str(principal.get("subject") or principal.get("id") or "authenticated")
+
+
+def _audit_management(request: Request, action: str, params: dict[str, Any], *, ok: bool = True) -> None:
+    audit = getattr(request.app.state, "audit", None)
+    if audit is not None:
+        audit.log(actor=f"console:{_audit_actor()}", action=action, params=params, ok=ok)
+
 meta_router = APIRouter(prefix="/api", tags=["meta"])
 nodes_router = APIRouter(prefix="/api/nodes", tags=["nodes"])
 tokens_router = APIRouter(prefix="/api/tokens", tags=["tokens"])
 servers_router = APIRouter(prefix="/api/servers", tags=["servers"])
+principals_router = APIRouter(prefix="/api/principals", tags=["principals"])
+agent_credentials_router = APIRouter(prefix="/api/agent-credentials", tags=["agent-credentials"])
 
 
 class TokenCreateRequest(BaseModel):
@@ -43,6 +72,26 @@ class TokenCreateRequest(BaseModel):
     scope: Literal["readonly", "operator"]
     server_ids: list[str] = Field(..., min_length=1, description='アクセス許可するサーバーID ("*" で全許可)')
     expires_in_days: int | None = Field(default=None, ge=1, le=3650, description="有効期限(日)。未指定=無期限")
+    principal_id: str | None = Field(default=None, description="紐付けるMCP principal")
+
+
+class PrincipalCreateRequest(BaseModel):
+    subject: str = Field(..., min_length=1, max_length=200)
+    display_name: str = Field(..., min_length=1, max_length=200)
+    role: Literal["admin", "operator", "viewer"] = "viewer"
+
+
+class PermissionRequest(BaseModel):
+    server_id: str = Field(..., min_length=1, max_length=100)
+    scope: Literal["readonly", "operator"]
+
+
+class AgentCredentialCreateRequest(BaseModel):
+    server_id: str = Field(..., min_length=1, max_length=100)
+    name: str = Field(..., min_length=1, max_length=100)
+    token: str = Field(..., min_length=1, description="Agent側に設定済みのBearer token")
+    agent_token_id: str = Field(..., min_length=1, max_length=100, description="Agent設定内のtoken id")
+    expires_in_days: int | None = Field(default=None, ge=1, le=3650)
 
 
 class TokenRotateRequest(BaseModel):
@@ -56,6 +105,7 @@ class TokenImportRequest(BaseModel):
     server_ids: list[str] = Field(..., min_length=1)
     scope: Literal["readonly", "operator"]
     expires_in_days: int | None = Field(default=None, ge=1, le=3650)
+    principal_id: str | None = Field(default=None)
 
 
 class ServerAddRequest(BaseModel):
@@ -108,8 +158,10 @@ def get_meta(request: Request) -> dict[str, Any]:
         "servers": [{"id": s.id, "name": s.name, "env": s.env, "url": s.url} for s in cfg.servers],
         "scopes": list(SCOPES),
         "mcp": {
-            "http_enabled": bool(getattr(request.app.state, "mcp_http_enabled", False)),
-            "http_path": cfg.console.mcp_http_path if getattr(request.app.state, "mcp_http_enabled", False) else None,
+            "http_enabled": cfg.mcp.enabled,
+            "http_host": cfg.mcp.host,
+            "http_port": cfg.mcp.port,
+            "http_path": cfg.mcp.path,
             "stdio_entry": "python -m app.mcp_entry",
             "http_entry": "python -m app.mcp_http_entry",
         },
@@ -180,9 +232,124 @@ def create_token(request: Request, payload: TokenCreateRequest) -> dict[str, Any
         scope=payload.scope,
         expires_in_days=payload.expires_in_days,
         created_by=f"console:{client_host}",
+        principal_id=payload.principal_id,
+    )
+    _audit_management(
+        request,
+        "issue_mcp_token",
+        {"token_id": record.id, "principal_id": payload.principal_id, "scope": payload.scope, "server_ids": server_ids},
     )
     log.info("トークン発行 id=%s name=%r scope=%s servers=%s", record.id, payload.name, payload.scope, server_ids)
     return {"token": raw, "record": record.to_dict()}
+
+
+# ---- principals / permissions ----
+@principals_router.get("")
+def list_principals(request: Request) -> dict[str, Any]:
+    store: TokenStore = request.app.state.store
+    return {"principals": store.list_principals()}
+
+
+@principals_router.post("")
+def create_principal(request: Request, payload: PrincipalCreateRequest) -> dict[str, Any]:
+    _require_admin(request)
+    store: TokenStore = request.app.state.store
+    try:
+        principal = store.create_principal(payload.subject, payload.display_name, payload.role)
+    except Exception as exc:  # noqa: BLE001 - duplicate subject is a client error
+        raise HTTPException(status_code=409, detail=f"principalを作成できません: {exc}") from exc
+    _audit_management(request, "create_principal", {"principal_id": principal["id"], "subject": payload.subject, "role": payload.role})
+    return principal
+
+
+@principals_router.get("/{principal_id}/permissions")
+def list_permissions(request: Request, principal_id: str) -> dict[str, Any]:
+    store: TokenStore = request.app.state.store
+    if store.get_principal(principal_id) is None:
+        raise HTTPException(status_code=404, detail=f"principalが見つかりません: {principal_id}")
+    return {"permissions": store.list_permissions(principal_id)}
+
+
+@principals_router.post("/{principal_id}/permissions")
+def grant_permission(request: Request, principal_id: str, payload: PermissionRequest) -> dict[str, Any]:
+    _require_admin(request)
+    store: TokenStore = request.app.state.store
+    if store.get_principal(principal_id) is None:
+        raise HTTPException(status_code=404, detail=f"principalが見つかりません: {principal_id}")
+    _validate_server_ids(request, [payload.server_id] if payload.server_id != "*" else ["*"])
+    store.grant_permission(principal_id, payload.server_id, payload.scope)
+    _audit_management(request, "grant_permission", {"principal_id": principal_id, "server_id": payload.server_id, "scope": payload.scope})
+    return {"granted": True, "principal_id": principal_id, **payload.model_dump()}
+
+
+@principals_router.delete("/{principal_id}/permissions/{scope}/{server_id}")
+def revoke_permission(request: Request, principal_id: str, scope: str, server_id: str) -> dict[str, Any]:
+    _require_admin(request)
+    if scope not in SCOPES:
+        raise HTTPException(status_code=400, detail=f"不正なscope: {scope}")
+    store: TokenStore = request.app.state.store
+    if store.get_principal(principal_id) is None:
+        raise HTTPException(status_code=404, detail=f"principalが見つかりません: {principal_id}")
+    revoked = store.revoke_permission(principal_id, server_id, scope)
+    _audit_management(request, "revoke_permission", {"principal_id": principal_id, "server_id": server_id, "scope": scope, "revoked": revoked})
+    return {"revoked": revoked}
+
+
+@principals_router.post("/{principal_id}/disable")
+def disable_principal(request: Request, principal_id: str) -> dict[str, Any]:
+    _require_admin(request)
+    store: TokenStore = request.app.state.store
+    if store.get_principal(principal_id) is None:
+        raise HTTPException(status_code=404, detail=f"principalが見つかりません: {principal_id}")
+    disabled = store.disable_principal(principal_id)
+    _audit_management(request, "disable_principal", {"principal_id": principal_id, "disabled": disabled})
+    return {"disabled": disabled, "principal_id": principal_id}
+
+
+@agent_credentials_router.post("")
+def register_agent_credential(request: Request, payload: AgentCredentialCreateRequest) -> dict[str, Any]:
+    _require_admin(request)
+    _server_or_404(request, payload.server_id)
+    store: TokenStore = request.app.state.store
+    credential = store.create_agent_credential(
+        payload.server_id, payload.name, payload.token, expires_in_days=payload.expires_in_days
+        , agent_token_id=payload.agent_token_id
+    )
+    _audit_management(request, "register_agent_credential", {"credential_id": credential.id, "server_id": payload.server_id, "agent_token_id": payload.agent_token_id})
+    return {"credential": credential.to_dict()}
+
+
+@agent_credentials_router.get("")
+def list_agent_credentials(request: Request) -> dict[str, Any]:
+    store: TokenStore = request.app.state.store
+    return {"credentials": [credential.to_dict() for credential in store.list_agent_credentials()]}
+
+
+@agent_credentials_router.post("/{credential_id}/revoke")
+def revoke_agent_credential(request: Request, credential_id: str) -> dict[str, Any]:
+    _require_admin(request)
+    store: TokenStore = request.app.state.store
+    if store.get_agent_credential(credential_id) is None:
+        raise HTTPException(status_code=404, detail=f"Agent credentialが見つかりません: {credential_id}")
+    credential = store.get_agent_credential(credential_id)
+    if not credential.agent_token_id or not request.app.state.config.agent.admin_token:
+        raise HTTPException(status_code=503, detail="Agent失効同期用のcredential設定がありません")
+    server = _server_or_404(request, credential.server_id)
+    import httpx
+    try:
+        response = httpx.post(
+            server.url.rstrip("/") + "/v1/admin/tokens/" + credential.agent_token_id + "/revoke",
+            headers={"X-LRM-Admin-Token": request.app.state.config.agent.admin_token},
+            verify=request.app.state.config.agent.tls_verify,
+            timeout=request.app.state.config.agent.timeout_seconds,
+        )
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"Agent失効同期に失敗しました: {exc}") from exc
+    if response.status_code >= 400:
+        raise HTTPException(status_code=502, detail=f"Agent失効同期に失敗しました (HTTP {response.status_code})")
+    revoked = store.revoke_agent_credential(credential_id)
+    _audit_management(request, "revoke_agent_credential", {"credential_id": credential_id, "agent_token_id": credential.agent_token_id, "agent_synced": True, "revoked": revoked})
+    return {"revoked": revoked, "id": credential_id, "agent_synced": True}
 
 
 @tokens_router.post("/import")
@@ -198,6 +365,7 @@ def import_token(request: Request, payload: TokenImportRequest) -> dict[str, Any
         expires_in_days=payload.expires_in_days,
         created_by="console:import",
         store_raw=True,
+        principal_id=payload.principal_id,
     )
     log.info("トークン登録 id=%s name=%r", record.id, payload.name)
     return {"record": record.to_dict()}
@@ -391,12 +559,11 @@ approvals_router = APIRouter(prefix="/api/approvals", tags=["approvals"])
 
 
 class ApproveRequest(BaseModel):
-    approver: str = Field(default="console", max_length=100, description="承認者名")
     ttl_minutes: int = Field(default=15, ge=1, le=1440, description="承認後の有効期限(分)")
 
 
 class RejectRequest(BaseModel):
-    approver: str = Field(default="console", max_length=100)
+    pass
 
 
 def _store_or_503(request: Request) -> ApprovalStore:
@@ -427,16 +594,17 @@ def get_approval(request: Request, approval_id: str) -> dict[str, Any]:
 def approve(request: Request, approval_id: str, payload: ApproveRequest) -> dict[str, Any]:
     """pending の承認要求を承認する (ttl_minutes 後に失効)。"""
     store = _store_or_503(request)
+    approver = _approval_actor(request, "console")
     try:
-        rec = store.approve(approval_id, approver=payload.approver, ttl_minutes=payload.ttl_minutes)
+        rec = store.approve(approval_id, approver=approver, ttl_minutes=payload.ttl_minutes)
     except ApprovalNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ApprovalError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    log.info("承認 id=%s approver=%r ttl=%s分", approval_id, payload.approver, payload.ttl_minutes)
+    log.info("承認 id=%s approver=%r ttl=%s分", approval_id, approver, payload.ttl_minutes)
     audit = getattr(request.app.state, "audit", None)
     if audit is not None:
-        audit.log(actor=f"console:{payload.approver}", action="approve_restart", server=rec.server_id,
+        audit.log(actor=f"console:{approver}", action="approve_restart", server=rec.server_id,
                   params={"service": rec.service, "approval_id": approval_id, "ttl_minutes": payload.ttl_minutes}, ok=True)
     return rec.to_dict()
 
@@ -445,16 +613,17 @@ def approve(request: Request, approval_id: str, payload: ApproveRequest) -> dict
 def reject(request: Request, approval_id: str, payload: RejectRequest) -> dict[str, Any]:
     """pending の承認要求を却下する。"""
     store = _store_or_503(request)
+    approver = _approval_actor(request, "console")
     try:
-        rec = store.reject(approval_id, approver=payload.approver)
+        rec = store.reject(approval_id, approver=approver)
     except ApprovalNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ApprovalError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    log.info("承認却下 id=%s approver=%r", approval_id, payload.approver)
+    log.info("承認却下 id=%s approver=%r", approval_id, approver)
     audit = getattr(request.app.state, "audit", None)
     if audit is not None:
-        audit.log(actor=f"console:{payload.approver}", action="reject_restart", server=rec.server_id,
+        audit.log(actor=f"console:{approver}", action="reject_restart", server=rec.server_id,
                   params={"service": rec.service, "approval_id": approval_id}, ok=True)
     return rec.to_dict()
 

@@ -38,6 +38,10 @@ h1{font-size:18px;margin:0;font-weight:600}
 .btn.danger{background:#cf222e;color:#fff;border-color:#cf222e}
 .btn:hover{opacity:.92}
 .table-wrap{background:var(--panel);border:1px solid var(--border);border-radius:8px;overflow:auto}
+.access-card{margin-top:16px}
+.inline-form{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}
+.inline-form input{flex:1 1 150px;min-width:130px;padding:7px 9px;border:1px solid var(--border);border-radius:6px;font-size:13px}
+.table-wrap.compact{margin-top:12px}
 table{width:100%;border-collapse:collapse;font-size:13px}
 th,td{padding:9px 12px;border-bottom:1px solid var(--border);text-align:left;vertical-align:middle}
 th{background:#f6f8fa;color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.3px}

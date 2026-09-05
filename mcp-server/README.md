@@ -1,7 +1,7 @@
 # Linux Remote Management MCP Server
 
 AI クライアント (Claude Desktop 等) から **MCP プロトコル** でリモート Linux ノードを管理するサーバー。
-社内管理コンソール (Web UI) も同梱。
+管理コンソール (Web UI) は専用Webサーバーとして分離して起動する。
 
 ## 構成
 
@@ -18,8 +18,9 @@ mcp-server/
 │   ├── api.py             # 管理コンソール HTTP API
 │   ├── mcp_server.py      # FastMCP アプリ (MCP Tools)
 │   ├── mcp_entry.py       # MCP stdio エントリポイント
-│   ├── main.py            # FastAPI アプリ組立て
-│   └── mcp_http_entry.py  # MCP streamable HTTP エントリポイント
+│   ├── main.py            # 管理コンソールFastAPI組立て
+│   ├── mcp_http.py        # MCP専用FastAPIアプリ
+│   └── mcp_http_entry.py  # MCP専用Webサーバー起動エントリポイント
 ├── tools/
 │   └── mock_agent.py      # 開発/テスト用モック Linux Agent
 ├── templates/
@@ -42,12 +43,15 @@ cd mcp-server
 pip install -r requirements.txt
 ```
 
-### 2. 管理コンソール + MCP HTTP サーバー起動
+### 2. 管理コンソール起動
 
 ```bash
 python -m app
 # → http://127.0.0.1:8080/ で社内管理コンソール
-# → http://127.0.0.1:8080/mcp で MCP streamable HTTP
+
+# 別ターミナルでMCP HTTPサーバーを起動
+python -m app.mcp_http_entry
+# → http://127.0.0.1:8090/ で MCP streamable HTTP
 ```
 
 ### 3. MCP (stdio) クライアント設定
@@ -59,7 +63,10 @@ python -m app
   "mcpServers": {
     "linux-remote-management": {
       "command": "python -m app.mcp_entry",
-      "cwd": "/path/to/mcp-server"
+      "cwd": "/path/to/mcp-server",
+      "env": {
+        "LINUX_MCP_TOKEN": "<issued-token>"
+      }
     }
   }
 }
@@ -79,6 +86,17 @@ python -m app
 - **失効**: `POST /api/tokens/{id}/revoke` — 即座に Agent 認証無効化
 - **削除**: `DELETE /api/tokens/{id}`
 - トークンは `data/tokens.db` (SQLite) に **SHA256 ハッシュ + 生値** (0600) で保存
+
+### 利用者・Agent credential管理
+- `POST /api/principals` — 利用者principalを作成
+- `POST /api/principals/{id}/permissions` — server/scope権限を付与
+- `DELETE /api/principals/{id}/permissions/{scope}/{server}` — 権限を失効
+- `POST /api/principals/{id}/disable` — principalと紐付くMCP tokenを無効化
+- `POST /api/agent-credentials` — Agent接続専用credentialを登録
+- `POST /api/agent-credentials/{id}/revoke` — Agent credentialを失効
+
+MCP利用者tokenとAgent接続credentialは別管理する。既存tokenは移行互換のためfallbackとして使用される。
+Agent credentialの失効はAgentの管理endpointへ同期されるため、`agent.admin_token` とAgent側 `agent.admin_token_hash` を対応させ、管理endpointをmTLS/Private Network内に限定する。
 
 ### API エンドポイント
 
@@ -103,9 +121,12 @@ python -m app
 # ターミナル1: モック Agent 起動 (8443)
 python -m tools.mock_agent --port 8443 --hostname dev-web-01 --token dev-token
 
-# ターミナル2: コンソール起動
+# ターミナル2: 管理コンソール起動
 python -m app
 # → http://127.0.0.1:8080/ でノード一覧を確認
+
+# ターミナル3: MCP HTTP起動 (必要な場合)
+python -m app.mcp_http_entry
 ```
 
 `config.yml` の `servers` に登録されたノードの `url` に対して、
@@ -131,9 +152,20 @@ console:
   host: 127.0.0.1
   port: 8080
   data_dir: ./data
-  mcp_http: true
-  # username: admin       # Basic認証を有効化 (任意)
+  auth_required: true
+  auth_mode: basic         # oidc を使う場合は下記OIDC設定も必須
+  # username: admin
   # password: change-me
+  # oidc_issuer: https://idp.example.internal/realms/company
+  # oidc_audience: linux-remote-management
+  # oidc_jwks_url: https://idp.example.internal/realms/company/protocol/openid-connect/certs
+
+mcp:
+  host: 127.0.0.1
+  port: 8090
+  path: /
+  enabled: true
+  stdio_token_env: LINUX_MCP_TOKEN
 
 agent:
   timeout_seconds: 3

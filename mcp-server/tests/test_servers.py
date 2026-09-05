@@ -51,7 +51,7 @@ def client(tmp_dir: Path, store):
             ServerConfig(id="dev-web-01", name="Dev Web", url="http://127.0.0.1:8443", env="development"),
         ),
         agent=AgentConfig(timeout_seconds=2.0, tls_verify=False),
-        console=ConsoleConfig(data_dir=str(tmp_dir), mcp_http=True),
+        console=ConsoleConfig(data_dir=str(tmp_dir), mcp_http=True, auth_required=False),
     )
     store.create_token(name="test-token", server_ids=["*"], scope="readonly")
     app = create_app(config, store=store)

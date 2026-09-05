@@ -27,7 +27,10 @@ def app_config(tmp_dir: Path) -> AppConfig:
             ServerConfig(id="dev-db-01", name="Dev DB 01", url="http://127.0.0.1:2", env="development"),
         ),
         agent=AgentConfig(timeout_seconds=2.0, tls_verify=False),
-        console=ConsoleConfig(data_dir=str(tmp_dir), require_approval=True, approval_ttl_minutes=15, mcp_audit=True),
+        console=ConsoleConfig(
+            data_dir=str(tmp_dir), require_approval=True, approval_ttl_minutes=15, mcp_audit=True,
+            auth_required=False,
+        ),
     )
 
 

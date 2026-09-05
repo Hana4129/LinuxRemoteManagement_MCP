@@ -46,6 +46,7 @@ class AgentConfig:
     # mTLS: クライアント証明書 (MCP Server 側)。client_key と対で指定する。
     client_cert: str = ""
     client_key: str = ""
+    admin_token: str = ""
 
 
 @dataclass(frozen=True)
@@ -57,6 +58,11 @@ class ConsoleConfig:
     mcp_http_path: str = "/mcp"
     username: str = ""
     password: str = ""
+    auth_required: bool = True
+    auth_mode: str = "basic"
+    oidc_issuer: str = ""
+    oidc_audience: str = ""
+    oidc_jwks_url: str = ""
     require_approval: bool = True
     approval_ttl_minutes: int = 15
     mcp_audit: bool = True
@@ -69,11 +75,21 @@ class ConsoleConfig:
 
 
 @dataclass(frozen=True)
+class McpConfig:
+    host: str = "127.0.0.1"
+    port: int = 8090
+    path: str = "/"
+    enabled: bool = True
+    stdio_token_env: str = "LINUX_MCP_TOKEN"
+
+
+@dataclass(frozen=True)
 class AppConfig:
     config_path: Path
     servers: tuple[ServerConfig, ...]
     agent: AgentConfig
     console: ConsoleConfig
+    mcp: McpConfig = field(default_factory=McpConfig)
     # 元の config.yml の生データ (save 時に servers だけ差し替えて書き戻す)。
     # username/password/mcp_http_path/agent.client_cert など未知のキーを保持する。
     raw: dict[str, Any] = field(default_factory=dict)
@@ -103,6 +119,7 @@ class AppConfig:
             servers=new_servers,
             agent=self.agent,
             console=self.console,
+            mcp=self.mcp,
             raw=self.raw,
         )
 
@@ -114,6 +131,7 @@ class AppConfig:
             servers=new_servers,
             agent=self.agent,
             console=self.console,
+            mcp=self.mcp,
             raw=self.raw,
         )
 
@@ -152,6 +170,11 @@ class AppConfig:
             console_raw["username"] = self.console.username
         if self.console.password:
             console_raw["password"] = self.console.password
+        console_raw["auth_required"] = self.console.auth_required
+        console_raw["auth_mode"] = self.console.auth_mode
+        console_raw["oidc_issuer"] = self.console.oidc_issuer
+        console_raw["oidc_audience"] = self.console.oidc_audience
+        console_raw["oidc_jwks_url"] = self.console.oidc_jwks_url
 
         agent_raw = dict(data.get("agent") or {})
         agent_raw.update(
@@ -166,9 +189,22 @@ class AppConfig:
             agent_raw["client_cert"] = self.agent.client_cert
         if self.agent.client_key:
             agent_raw["client_key"] = self.agent.client_key
+        if self.agent.admin_token:
+            agent_raw["admin_token"] = self.agent.admin_token
 
         data["console"] = console_raw
         data["agent"] = agent_raw
+        mcp_raw = dict(data.get("mcp") or {})
+        mcp_raw.update(
+            {
+                "host": self.mcp.host,
+                "port": self.mcp.port,
+                "path": self.mcp.path,
+                "enabled": self.mcp.enabled,
+                "stdio_token_env": self.mcp.stdio_token_env,
+            }
+        )
+        data["mcp"] = mcp_raw
         data["servers"] = [s.to_yaml_dict() for s in self.servers]
 
         with open(self.config_path, "w", encoding="utf-8") as f:
@@ -211,6 +247,11 @@ def _console_from_raw(raw: dict[str, Any], agent_user: str, agent_pass: str) -> 
         mcp_http_path=str(raw.get("mcp_http_path", "/mcp")),
         username=user,
         password=password,
+        auth_required=bool(raw.get("auth_required", True)),
+        auth_mode=str(raw.get("auth_mode", "basic")),
+        oidc_issuer=str(raw.get("oidc_issuer", "")),
+        oidc_audience=str(raw.get("oidc_audience", "")),
+        oidc_jwks_url=str(raw.get("oidc_jwks_url", "")),
         require_approval=bool(raw.get("require_approval", True)),
         approval_ttl_minutes=int(raw.get("approval_ttl_minutes", 15)),
         mcp_audit=bool(raw.get("mcp_audit", True)),
@@ -252,6 +293,7 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         user_agent=str(agent_raw.get("user_agent", "linux-mcp-server/0.1")),
         client_cert=str(agent_raw.get("client_cert", "")),
         client_key=str(agent_raw.get("client_key", "")),
+        admin_token=str(agent_raw.get("admin_token", "")) or os.environ.get("LINUX_MCP_AGENT_ADMIN_TOKEN", ""),
     )
 
     console = _console_from_raw(
@@ -260,4 +302,13 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         agent_pass=os.environ.get("LINUX_MCP_CONSOLE_PASS", ""),
     )
 
-    return AppConfig(config_path=config_path, servers=tuple(servers), agent=agent, console=console, raw=raw)
+    mcp_raw = raw.get("mcp") or {}
+    mcp = McpConfig(
+        host=str(mcp_raw.get("host", "127.0.0.1")),
+        port=int(mcp_raw.get("port", 8090)),
+        path=str(mcp_raw.get("path", "/")),
+        enabled=bool(mcp_raw.get("enabled", True)),
+        stdio_token_env=str(mcp_raw.get("stdio_token_env", "LINUX_MCP_TOKEN")),
+    )
+
+    return AppConfig(config_path=config_path, servers=tuple(servers), agent=agent, console=console, mcp=mcp, raw=raw)

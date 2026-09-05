@@ -3,8 +3,8 @@ REM =====================================================================
 REM Linux Remote Management MCP Server — 管理コンソール 起動スクリプト (Windows)
 REM =====================================================================
 REM
-REM   HTTP API (管理コンソール) : http://127.0.0.1:8080/
-REM   MCP (streamable HTTP)    : http://127.0.0.1:8080/mcp
+REM   管理コンソール          : http://127.0.0.1:8080/
+REM   MCP HTTP は別プロセスで python -m app.mcp_http_entry を起動
 REM
 REM   設定ファイル: config.yml (同ディレクトリ)
 REM   データ保存  : data/ (tokens.db, approvals.db, mcp_audit.log)
@@ -18,7 +18,7 @@ echo   Linux Remote Management MCP Server
 echo ============================================
 echo.
 echo   管理コンソール : http://127.0.0.1:8080/
-echo   MCP endpoint  : http://127.0.0.1:8080/mcp
+echo   MCP HTTP      : 別ターミナルで python -m app.mcp_http_entry
 echo.
 
 REM ---- ポート使用中チェック ----
