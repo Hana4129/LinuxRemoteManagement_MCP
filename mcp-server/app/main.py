@@ -9,7 +9,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Request, Response
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -30,6 +30,15 @@ from .db import TokenStore
 from .mcp_audit import McpAudit
 from .mcp_ratelimit import RateLimiter
 from .oidc import OidcError, OidcValidator
+from .oidc_browser import (
+    CSRF_COOKIE,
+    SESSION_COOKIE,
+    BrowserSessionStore,
+    OidcBrowserError,
+    build_authorization_url,
+    exchange_code,
+    _pkce_challenge,
+)
 
 logger = logging.getLogger("linux_mcp")
 
@@ -48,6 +57,9 @@ def _maybe_basic_auth(app: FastAPI, config: AppConfig) -> None:
 
         @app.middleware("http")
         async def _oidc_auth(request: Request, call_next):
+            if current_principal() is not None:
+                # セッション認証 (ブラウザログイン) 済みのため何もしない
+                return await call_next(request)
             header = request.headers.get("Authorization", "")
             if not header.startswith("Bearer "):
                 return Response(status_code=401, content="OIDC Bearer token required")
@@ -141,6 +153,117 @@ def _maybe_mcp_token_auth(app: FastAPI, config: AppConfig) -> None:
             reset_current_principal(context)
 
 
+def _maybe_oidc_session(app: FastAPI, config: AppConfig) -> None:
+    """OIDC Authorization Code + PKCE ブラウザログインとセッションCookie認証を有効化する。
+
+    Basic/OIDC Bearer 認証より外側で動作し、有効なセッションCookieがあれば
+    principal を設定して以降のミドルウェア・APIを通過させる。
+    変更系リクエストには X-CSRF-Token ヘッダーを要求する。
+    """
+    console = config.console
+    if not console.auth_required or console.auth_mode != "oidc" or not console.oidc_browser_login:
+        return
+    sessions = BrowserSessionStore(config.data_dir / "sessions.db")
+    max_age = console.session_lifetime_minutes * 60
+    cookie_secure = console.session_cookie_secure
+
+    def _set_session_cookies(response: Response, session: dict) -> None:
+        response.set_cookie(
+            SESSION_COOKIE, session["session_id"], max_age=max_age,
+            httponly=True, samesite="lax", secure=cookie_secure, path="/",
+        )
+        # CSRFトークンはJSから読めるよう non-HttpOnly で発行する (機密値ではない)
+        response.set_cookie(
+            CSRF_COOKIE, session["csrf_token"], max_age=max_age,
+            httponly=False, samesite="strict", secure=cookie_secure, path="/",
+        )
+
+    @app.middleware("http")
+    async def _oidc_session(request: Request, call_next):
+        path = request.url.path
+        method = request.method
+        store: TokenStore = request.app.state.store
+
+        if path == "/api/auth/login" and method == "GET":
+            state, verifier, nonce = sessions.create_login_state()
+            try:
+                url = build_authorization_url(console, state, _pkce_challenge(verifier), nonce)
+            except OidcBrowserError as exc:
+                return JSONResponse({"detail": str(exc)}, status_code=503)
+            return RedirectResponse(url, status_code=302)
+
+        if path == "/api/auth/callback" and method == "GET":
+            error = request.query_params.get("error")
+            if error:
+                detail = request.query_params.get("error_description") or error
+                return JSONResponse({"detail": f"IdPがログインを拒否しました: {detail}"}, status_code=400)
+            state = request.query_params.get("state", "")
+            code = request.query_params.get("code", "")
+            state_data = sessions.pop_login_state(state) if state else None
+            if state_data is None:
+                return JSONResponse({"detail": "state が無効または期限切れです"}, status_code=400)
+            try:
+                id_token = exchange_code(console, code, state_data["code_verifier"])
+                claims = OidcValidator(
+                    console.oidc_issuer, console.oidc_audience, console.oidc_jwks_url
+                ).validate(id_token)
+            except (OidcBrowserError, OidcError) as exc:
+                return JSONResponse({"detail": f"OIDCログインに失敗しました: {exc}"}, status_code=401)
+            if claims.get("nonce") != state_data["nonce"]:
+                return JSONResponse({"detail": "nonce が一致しません"}, status_code=401)
+            subject = str(claims.get("sub") or "")
+            principal = store.get_principal_by_subject(subject)
+            if principal is None:
+                return JSONResponse({"detail": f"未登録のsubjectです: {subject}"}, status_code=403)
+            session = sessions.create_session(principal, console.session_lifetime_minutes)
+            response = RedirectResponse("/", status_code=302)
+            _set_session_cookies(response, session)
+            return response
+
+        if path == "/api/auth/logout" and method == "POST":
+            sessions.delete_session(request.cookies.get(SESSION_COOKIE, ""))
+            response = JSONResponse({"logged_out": True})
+            response.delete_cookie(SESSION_COOKIE, path="/")
+            response.delete_cookie(CSRF_COOKIE, path="/")
+            return response
+
+        if path == "/api/auth/me" and method == "GET":
+            session = sessions.get_session(request.cookies.get(SESSION_COOKIE, ""))
+            if session is None:
+                return JSONResponse({"authenticated": False}, status_code=401)
+            return JSONResponse({
+                "authenticated": True,
+                "subject": session["subject"],
+                "display_name": session["display_name"],
+                "role": session["role"],
+                "csrf_token": session["csrf_token"],
+                "expires_at": session["expires_at"],
+            })
+
+        sid = request.cookies.get(SESSION_COOKIE, "")
+        if not sid:
+            return await call_next(request)
+        session = sessions.get_session(sid)
+        if session is None:
+            # 無効・期限切れのcookieは無視して未認証扱い (保護APIは401を返す)
+            return await call_next(request)
+        if method in {"POST", "PUT", "DELETE", "PATCH"} and not path.startswith("/api/auth/"):
+            header_token = request.headers.get("X-CSRF-Token", "")
+            if not header_token or not secrets.compare_digest(header_token, session["csrf_token"]):
+                return JSONResponse({"detail": "CSRF token が無効です"}, status_code=403)
+        principal = store.get_principal(session["principal_id"])
+        if principal is None or not principal.get("enabled", True):
+            sessions.delete_session(sid)
+            return JSONResponse({"detail": "セッションの principal が無効です"}, status_code=401)
+        context = set_current_principal(principal)
+        try:
+            request.state.principal = principal
+            request.state.session_auth = True
+            return await call_next(request)
+        finally:
+            reset_current_principal(context)
+
+
 def _maybe_approval_store(config: AppConfig) -> ApprovalStore | None:
     if not config.console.require_approval:
         return None
@@ -225,6 +348,7 @@ def create_app(config: AppConfig | None = None, store: TokenStore | None = None)
     # 未処理の Bearer トークンを引き取らせる
     _maybe_mcp_token_auth(app, config)
     _maybe_basic_auth(app, config)
+    _maybe_oidc_session(app, config)
     _maybe_rate_limit(app, config)
 
     logger.info(

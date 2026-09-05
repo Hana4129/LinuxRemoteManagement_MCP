@@ -253,17 +253,17 @@ principal作成、権限付与/失効、principal無効化、MCP token発行、A
 
 ### 11. CSRFとブラウザセッション
 
-**状態: CSRFの基本対策を実装済み。OIDCブラウザセッション設計が残っている。**
+**状態: ブラウザセッション機構を実装済み (`tests/test_oidc_session.py`)。実IdP環境での統合確認が残っている。**
 
-OIDCをブラウザログインに利用する場合は、Authorization headerだけでなくブラウザセッション設計が必要になる。
+管理コンソールの変更系リクエストには同一originの `Origin` 検査に加え、OIDCブラウザログイン用のセッション機構を実装済み。
 
-管理コンソールの変更系リクエストには同一originの `Origin` 検査を実装済み。
+- OIDC Authorization Code + PKCE (S256) ログイン (設定手順は `doc/OIDC.md` 7章)
+- サーバー側セッションストア (`data_dir/sessions.db`) + HttpOnly / SameSite / Secure cookie
+- セッション紐付けCSRF token (`X-CSRF-Token` を変更系リクエストへ強制)
+- logout (`POST /api/auth/logout`) と session expiry (`session_lifetime_minutes`)
+- ログインstateの単回利用・10分TTL、id_token nonce検証、未登録subjectの403拒否
 
-- OIDC Authorization Code + PKCE
-- Secure / HttpOnly / SameSite cookie
-- CSRF token
-- logoutとsession expiry
-- reverse proxyでのTLS終端位置
+残作業は実IdP環境でのブラウザ統合テスト、コンソールUIへのログイン導線追加、リバースプロキシでのTLS終端位置の確認である。
 
 ### 12. テスト拡張
 

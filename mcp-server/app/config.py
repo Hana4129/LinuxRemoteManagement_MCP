@@ -63,6 +63,14 @@ class ConsoleConfig:
     oidc_issuer: str = ""
     oidc_audience: str = ""
     oidc_jwks_url: str = ""
+    oidc_browser_login: bool = False
+    oidc_client_id: str = ""
+    oidc_client_secret: str = ""
+    oidc_redirect_uri: str = ""
+    oidc_authorization_endpoint: str = ""
+    oidc_token_endpoint: str = ""
+    session_cookie_secure: bool = True
+    session_lifetime_minutes: int = 480
     require_approval: bool = True
     approval_ttl_minutes: int = 15
     mcp_audit: bool = True
@@ -175,6 +183,18 @@ class AppConfig:
         console_raw["oidc_issuer"] = self.console.oidc_issuer
         console_raw["oidc_audience"] = self.console.oidc_audience
         console_raw["oidc_jwks_url"] = self.console.oidc_jwks_url
+        if self.console.oidc_browser_login:
+            console_raw["oidc_browser_login"] = True
+            console_raw["oidc_client_id"] = self.console.oidc_client_id
+            console_raw["oidc_redirect_uri"] = self.console.oidc_redirect_uri
+            if self.console.oidc_client_secret:
+                console_raw["oidc_client_secret"] = self.console.oidc_client_secret
+            if self.console.oidc_authorization_endpoint:
+                console_raw["oidc_authorization_endpoint"] = self.console.oidc_authorization_endpoint
+            if self.console.oidc_token_endpoint:
+                console_raw["oidc_token_endpoint"] = self.console.oidc_token_endpoint
+            console_raw["session_lifetime_minutes"] = self.console.session_lifetime_minutes
+            console_raw["session_cookie_secure"] = self.console.session_cookie_secure
 
         agent_raw = dict(data.get("agent") or {})
         agent_raw.update(
@@ -252,6 +272,14 @@ def _console_from_raw(raw: dict[str, Any], agent_user: str, agent_pass: str) -> 
         oidc_issuer=str(raw.get("oidc_issuer", "")),
         oidc_audience=str(raw.get("oidc_audience", "")),
         oidc_jwks_url=str(raw.get("oidc_jwks_url", "")),
+        oidc_browser_login=bool(raw.get("oidc_browser_login", False)),
+        oidc_client_id=str(raw.get("oidc_client_id", "")),
+        oidc_client_secret=str(raw.get("oidc_client_secret", "")),
+        oidc_redirect_uri=str(raw.get("oidc_redirect_uri", "")),
+        oidc_authorization_endpoint=str(raw.get("oidc_authorization_endpoint", "")),
+        oidc_token_endpoint=str(raw.get("oidc_token_endpoint", "")),
+        session_lifetime_minutes=max(1, int(raw.get("session_lifetime_minutes", 480))),
+        session_cookie_secure=bool(raw.get("session_cookie_secure", True)),
         require_approval=bool(raw.get("require_approval", True)),
         approval_ttl_minutes=int(raw.get("approval_ttl_minutes", 15)),
         mcp_audit=bool(raw.get("mcp_audit", True)),
@@ -321,7 +349,16 @@ def load_config(path: str | Path | None = None) -> AppConfig:
             raise ValueError("OIDCモードには oidc_jwks_url の設定が必要です")
         if not console.oidc_jwks_url.startswith("https://"):
             raise ValueError("oidc_jwks_url は https:// である必要があります")
-
-    return AppConfig(config_path=config_path, servers=tuple(servers), agent=agent, console=console, mcp=mcp, raw=raw)
+        if console.oidc_browser_login:
+            if not console.oidc_client_id:
+                raise ValueError("oidc_browser_login には oidc_client_id の設定が必要です")
+            if not console.oidc_redirect_uri:
+                raise ValueError("oidc_browser_login には oidc_redirect_uri の設定が必要です")
+            if not console.oidc_redirect_uri.startswith("https://"):
+                raise ValueError("oidc_redirect_uri は https:// である必要があります")
+            if console.session_cookie_secure and not console.oidc_redirect_uri.startswith("https://"):
+                raise ValueError(
+                    "oidc_redirect_uri が http:// の場合は session_cookie_secure=false を明示してください"
+                )
 
     return AppConfig(config_path=config_path, servers=tuple(servers), agent=agent, console=console, mcp=mcp, raw=raw)
