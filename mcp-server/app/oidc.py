@@ -18,6 +18,11 @@ class OidcValidator:
     def __init__(self, issuer: str, audience: str, jwks_url: str, cache_seconds: int = 300):
         if not issuer or not audience or not jwks_url:
             raise ValueError("OIDCには issuer, audience, jwks_url が必要です")
+        if not issuer or not audience or not jwks_url:
+            raise ValueError("OIDCには issuer, audience, jwks_url が必要です")
+        if not jwks_url.startswith("https://"):
+            raise ValueError("oidc_jwks_url は https:// である必要があります")
+
         self.issuer = issuer
         self.audience = audience
         self.jwks_url = jwks_url

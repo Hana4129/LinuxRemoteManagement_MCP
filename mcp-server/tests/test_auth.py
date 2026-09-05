@@ -162,4 +162,89 @@ def test_oidc_subject_must_be_provisioned(tmp_path, store, monkeypatch):
     with TestClient(app) as client:
         assert client.get("/api/meta", headers={"Authorization": "Bearer unknown"}).status_code == 403
         store.create_principal("known-sub", "Known User", "viewer")
+
+
+def test_oidc_missing_issuer_rejected(tmp_path, store):
+    """issuer未設定時にOIDCモードが拒否されることを確認"""
+    config = _config(tmp_path)
+    config = AppConfig(
+        config_path=config.config_path,
+        servers=config.servers,
+        agent=config.agent,
+        console=ConsoleConfig(
+            data_dir=config.console.data_dir,
+            auth_required=True,
+            auth_mode="oidc",
+            oidc_issuer="",  # 未設定
+            oidc_audience="lrm",
+            oidc_jwks_url="https://issuer.example/keys",
+            mcp_http=False,
+        ),
+    )
+    with pytest.raises(ValueError, match="issuer"):
+        create_app(config, store=store)
+
+
+def test_oidc_missing_audience_rejected(tmp_path, store):
+    """audience未設定時にOIDCモードが拒否されることを確認"""
+    config = _config(tmp_path)
+    config = AppConfig(
+        config_path=config.config_path,
+        servers=config.servers,
+        agent=config.agent,
+        console=ConsoleConfig(
+            data_dir=config.console.data_dir,
+            auth_required=True,
+            auth_mode="oidc",
+            oidc_issuer="https://issuer.example",
+            oidc_audience="",  # 未設定
+            oidc_jwks_url="https://issuer.example/keys",
+            mcp_http=False,
+        ),
+    )
+    with pytest.raises(ValueError, match="audience"):
+        create_app(config, store=store)
+
+
+def test_oidc_missing_jwks_url_rejected(tmp_path, store):
+    """jwks_url未設定時にOIDCモードが拒否されることを確認"""
+    config = _config(tmp_path)
+    config = AppConfig(
+        config_path=config.config_path,
+        servers=config.servers,
+        agent=config.agent,
+        console=ConsoleConfig(
+            data_dir=config.console.data_dir,
+            auth_required=True,
+            auth_mode="oidc",
+            oidc_issuer="https://issuer.example",
+            oidc_audience="lrm",
+            oidc_jwks_url="",  # 未設定
+            mcp_http=False,
+        ),
+    )
+    with pytest.raises(ValueError, match="jwks_url"):
+        create_app(config, store=store)
+
+
+def test_oidc_invalid_jwks_url_rejected(tmp_path, store, monkeypatch):
+    """不正なJWKS URL時にエラーになることを確認"""
+    config = _config(tmp_path)
+    config = AppConfig(
+        config_path=config.config_path,
+        servers=config.servers,
+        agent=config.agent,
+        console=ConsoleConfig(
+            data_dir=config.console.data_dir,
+            auth_required=True,
+            auth_mode="oidc",
+            oidc_issuer="https://issuer.example",
+            oidc_audience="lrm",
+            oidc_jwks_url="http://insecure.example/keys",  # HTTP (HTTPSでない)
+            mcp_http=False,
+        ),
+    )
+    with pytest.raises(ValueError, match="https"):
+        create_app(config, store=store)
+
         assert client.get("/api/meta", headers={"Authorization": "Bearer known-sub"}).status_code == 200

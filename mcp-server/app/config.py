@@ -311,4 +311,17 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         stdio_token_env=str(mcp_raw.get("stdio_token_env", "LINUX_MCP_TOKEN")),
     )
 
+    # OIDC設定のバリデーション
+    if console.auth_mode == "oidc":
+        if not console.oidc_issuer:
+            raise ValueError("OIDCモードには oidc_issuer の設定が必要です")
+        if not console.oidc_audience:
+            raise ValueError("OIDCモードには oidc_audience の設定が必要です")
+        if not console.oidc_jwks_url:
+            raise ValueError("OIDCモードには oidc_jwks_url の設定が必要です")
+        if not console.oidc_jwks_url.startswith("https://"):
+            raise ValueError("oidc_jwks_url は https:// である必要があります")
+
+    return AppConfig(config_path=config_path, servers=tuple(servers), agent=agent, console=console, mcp=mcp, raw=raw)
+
     return AppConfig(config_path=config_path, servers=tuple(servers), agent=agent, console=console, mcp=mcp, raw=raw)
