@@ -250,6 +250,107 @@ def test_agent_credentials_are_separate_and_revocable(tmp_path, store, monkeypat
     assert store.find_agent_credential("dev") is None
 
 
+def test_agent_credential_generate_returns_raw_once(tmp_path, store):
+    app = create_app(_config(tmp_path, username="admin", password="secret", admin_token="admin-secret"), store=store)
+    headers = {"Authorization": "Basic " + base64.b64encode(b"admin:secret").decode("ascii")}
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/agent-credentials/generate",
+            json={"server_id": "dev", "name": "gen-agent", "agent_token_id": "agent-gen"},
+            headers=headers,
+        )
+        assert response.status_code == 200
+        body = response.json()
+        # 生tokenは一度だけ返す (CSPRNG生成)
+        assert body["token"].startswith("lra_")
+        assert len(body["token"]) > 40
+        assert "token" not in body["credential"]
+        # 一覧に生値を再表示しない
+        listing = client.get("/api/agent-credentials", headers=headers).json()
+        assert all("token" not in c for c in listing["credentials"])
+        assert all(body["token"] != c.get("token_raw", "") for c in listing["credentials"])
+    # ストア内では生値を保持し、findで利用できる
+    found = store.find_agent_credential("dev")
+    assert found is not None and found.token_raw == body["token"]
+
+
+def test_agent_credential_rotation_creates_new_with_grace(tmp_path, store):
+    app = create_app(_config(tmp_path, username="admin", password="secret", admin_token="admin-secret"), store=store)
+    headers = {"Authorization": "Basic " + base64.b64encode(b"admin:secret").decode("ascii")}
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/agent-credentials",
+            json={"server_id": "dev", "name": "rot-agent", "token": "old-secret", "agent_token_id": "agent-rot"},
+            headers=headers,
+        ).json()["credential"]
+        old_id = created["id"]
+        response = client.post(
+            f"/api/agent-credentials/{old_id}/rotate",
+            json={"grace_period_days": 3},
+            headers=headers,
+        )
+        assert response.status_code == 200
+        body = response.json()
+        new_id = body["credential"]["id"]
+        # 新しい生tokenが一度だけ返る
+        assert body["token"].startswith("lra_") and body["token"] != "old-secret"
+        # 旧credentialはグラ期間中はenabledのまま残る
+        assert body["old_credential"]["id"] == old_id
+        assert body["old_credential"]["grace_ends_at"] is not None
+        assert body["old_credential"]["enabled"] is True
+        old = store.get_agent_credential(old_id)
+        assert old.enabled and old.grace_ends_at is not None
+        # findは新しいcredentialを返す (rowid DESCで同一秒の新規を優先)
+        assert store.find_agent_credential("dev").id == new_id
+        assert store.find_agent_credential("dev").token_raw == body["token"]
+        # 履歴が記録される
+        history = client.get(f"/api/agent-credentials/{old_id}/rotations", headers=headers).json()
+        assert history["rotations"][0]["old_credential_id"] == old_id
+        assert history["rotations"][0]["new_credential_id"] == new_id
+        assert history["rotations"][0]["rotated_by"]
+
+
+def test_agent_credential_rotation_rejects_revoked(tmp_path, store):
+    app = create_app(_config(tmp_path, username="admin", password="secret", admin_token="admin-secret"), store=store)
+    headers = {"Authorization": "Basic " + base64.b64encode(b"admin:secret").decode("ascii")}
+    with TestClient(app) as client:
+        credential_id = store.create_agent_credential("dev", "revoked-agent", "raw-secret", agent_token_id="agent-x").id
+        store.revoke_agent_credential(credential_id)
+        response = client.post(
+            f"/api/agent-credentials/{credential_id}/rotate",
+            json={"grace_period_days": 7},
+            headers=headers,
+        )
+        assert response.status_code == 400
+        # 404 も確認
+        assert client.post("/api/agent-credentials/agt_missing/rotate", json={}, headers=headers).status_code == 404
+
+
+def test_agent_credential_grace_expiry_disables_old(tmp_path, store):
+    app = create_app(_config(tmp_path, username="admin", password="secret", admin_token="admin-secret"), store=store)
+    headers = {"Authorization": "Basic " + base64.b64encode(b"admin:secret").decode("ascii")}
+    with TestClient(app) as client:
+        old_id = store.create_agent_credential("dev", "grace-agent", "old-secret", agent_token_id="agent-g").id
+        body = client.post(
+            f"/api/agent-credentials/{old_id}/rotate",
+            json={"grace_period_days": 7},
+            headers=headers,
+        ).json()
+        new_id = body["credential"]["id"]
+        # グラ期間を過去に設定して期限切れを再現する
+        with store._lock, store._connect() as conn:
+            conn.execute("UPDATE agent_credentials SET grace_ends_at = ? WHERE id = ?", ("2000-01-01T00:00:00+00:00", old_id))
+        old = store.get_agent_credential(old_id)
+        # グラ期間経過後は旧credentialは使用不可
+        assert old.enabled and old.active is False
+        assert store.find_agent_credential("dev").id == new_id
+        # cleanup で完全失効 (enabled=0)
+        cleaned = client.post("/api/agent-credentials/cleanup-grace-periods", headers=headers).json()["cleaned"]
+        assert cleaned == 1
+        assert store.get_agent_credential(old_id).enabled is False
+        assert client.post("/api/agent-credentials/cleanup-grace-periods", headers=headers).json()["cleaned"] == 0
+
+
 def test_oidc_subject_must_be_provisioned(tmp_path, store, monkeypatch):
     config = _config(tmp_path)
     config = AppConfig(

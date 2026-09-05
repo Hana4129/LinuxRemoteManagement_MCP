@@ -133,6 +133,60 @@ curl -X POST http://localhost:8080/api/tokens/{token_id}/revoke
 curl -X DELETE http://localhost:8080/api/tokens/{token_id}
 ```
 
+### 2.4 Agent credentialの生成・ローテーション
+
+Agent credential (MCP Server が各Agentへ認証するためのBearer token) は、
+生値を手入力せずサーバー側で生成する方式を標準とする。
+
+#### 発行 (標準フロー: サーバー側生成)
+
+```bash
+# credentialをサーバー側で生成する (生tokenはレスポンスに一度だけ返る)
+curl -X POST http://localhost:8080/api/agent-credentials/generate \
+  -H "Content-Type: application/json" \
+  -d '{"server_id": "web01", "name": "web01-agent", "agent_token_id": "web01-primary"}'
+```
+
+返された `token` の生値をAgent側の `config.yml` の該当token idへ配布し、
+Agentを再読み込みする。生値は一覧APIに再表示されないため、
+この時点でパスワードマネージャ等へ保管すること。
+
+(代替フロー) Agent側で生成済みのtokenを登録する場合は
+`POST /api/agent-credentials` を使用する。
+
+#### ローテーション
+
+```bash
+# ローテーション実行 (グラ期間7日 / 生tokenは一度だけ返る)
+curl -X POST http://localhost:8080/api/agent-credentials/{credential_id}/rotate \
+  -H "Content-Type: application/json" \
+  -d '{"grace_period_days": 7}'
+```
+
+1. レスポンスの `token` (生値) をAgent側 `config.yml` へ配布し、Agentをreloadする
+2. Agent側の接続確認 (ノード一覧の表示やhealthチェック) を行う
+3. グラ期間 (旧credentialは `enabled=1` だが `grace_ends_at` まで) をもって
+   旧credentialへのロールバックが可能
+4. グラ期間経過後は旧credentialは自動的に使用不可 (`active=false`) となる
+
+#### ローテーション履歴と完全失効
+
+```bash
+# ローテーション履歴取得
+curl http://localhost:8080/api/agent-credentials/{credential_id}/rotations
+
+# グラ期間経過した旧credentialを一括無効化 (完全失効)
+# systemd timer / cron で日次実行を推奨
+curl -X POST http://localhost:8080/api/agent-credentials/cleanup-grace-periods
+```
+
+| 状態 | enabled | active | 説明 |
+|------|---------|--------|------|
+| 新credential | 1 | true | 現在使用中 |
+| 旧credential (グラ期間中) | 1 | true | ロールバック用に残存 |
+| 旧credential (グラ期間経過) | 1 | false | 使用不可、cleanup待ち |
+| 完全失効後 | 0 | false | cleanup実行後 |
+
 ---
 
 ## 3. 障害対応

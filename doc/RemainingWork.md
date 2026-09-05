@@ -20,7 +20,7 @@ Linux Remote Management MCP の認証・認可分離に関する残作業をま�
 - 管理コンソール静的アセットのバージョン付きキャッシュ制御
 - Basic認証アカウントをadmin principalとして扱う認証主体統一
 - 管理コンソールのMCP Bearerトークン認証 (principal紐付けトークンのRBAC強制・無効/未紐付けトークンの401拒否)
-- Python テスト 110 件
+- Python テスト 114 件
 
 ## 優先度 P0: 本番導入前に必要
 
@@ -189,20 +189,24 @@ principal作成、権限付与/失効、principal無効化、MCP token発行、A
 
 ### 7. Agent credentialの発行・配布フロー
 
+**状態: 生成API・ローテーション (グラ期間つき) を実装済み。Secret Manager連携が残っている。**
+
 **内容**
 
-現在はAgent側に設定済みのBearer tokenを管理コンソールへ登録する方式である。
+- `POST /api/agent-credentials/generate` でサーバー側 (CSPRNG) がtokenを生成し、生値はレスポンスに一度だけ返す (発行フローの標準化)
+- `POST /api/agent-credentials/{id}/rotate` でローテーション。旧credentialはgrace期間中残存し、期間経過後は使用不可
+- `GET /api/agent-credentials/{id}/rotations` でローテーション履歴を追跡 (rotated_by記録つき)
+- `POST /api/agent-credentials/cleanup-grace-periods` でグラ期間経過credentialを完全失効
+- token ID、scope、allowlistの対応はAgent設定 (`config.yml`) とcredentialレコード (`agent_token_id`) で管理
+- Secret Managerからの直接登録は未対応 (生値の一時表示は `/generate` で最小化済み)
 
-- Agent token生成方法を標準化する
-- token ID、scope、allowlistの対応を管理する
-- 秘密値を手入力せずSecret Managerから登録できるようにする
-- credentialローテーション手順を整備する
+**完了条件の状況**
 
-**完了条件**
+- 生credentialがGit、ログ、API一覧に出ない → 実装・テスト済み (一覧は生値を返さない)
+- credentialの発行、配布、ローテーション、失効を追跡できる → 実装済み (監査ログ + rotations履歴)
+- 古いcredentialのgrace期間と完全失効を確認できる → 実装・テスト済み
 
-- 生credentialがGit、ログ、API一覧に出ない
-- credentialの発行、配布、ローテーション、失効を追跡できる
-- 古いcredentialのgrace期間と完全失効を確認できる
+残作業はSecret Manager (Vault等) 連携と、実Agent環境でのローテーションE2E確認である。
 
 ### 8. 失効同期の障害時運用
 

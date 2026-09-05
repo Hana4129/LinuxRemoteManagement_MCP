@@ -71,7 +71,19 @@ CREATE TABLE IF NOT EXISTS agent_credentials (
     created_at    TEXT NOT NULL,
     expires_at    TEXT,
     enabled       INTEGER NOT NULL DEFAULT 1,
-    agent_sync_state TEXT NOT NULL DEFAULT 'synced'
+    agent_sync_state TEXT NOT NULL DEFAULT 'synced',
+    grace_ends_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS agent_credential_rotations (
+    id                TEXT PRIMARY KEY,
+    old_credential_id TEXT NOT NULL,
+    new_credential_id TEXT NOT NULL,
+    rotated_at        TEXT NOT NULL,
+    grace_ends_at     TEXT NOT NULL,
+    rotated_by        TEXT,
+    FOREIGN KEY (old_credential_id) REFERENCES agent_credentials(id),
+    FOREIGN KEY (new_credential_id) REFERENCES agent_credentials(id)
 );
 
 CREATE TABLE IF NOT EXISTS token_rotations (
@@ -153,10 +165,16 @@ class AgentCredential:
     expires_at: str | None
     enabled: bool
     agent_sync_state: str = "synced"
+    grace_ends_at: str | None = None
 
     @property
     def active(self) -> bool:
-        return self.enabled and not is_expired(self.expires_at)
+        if not self.enabled or is_expired(self.expires_at):
+            return False
+        # グラ期間を過ぎた旧credentialは使用しない (完全失効待ち)
+        if self.grace_ends_at and is_expired(self.grace_ends_at):
+            return False
+        return True
 
     @property
     def server_ids(self) -> list[str]:
@@ -177,6 +195,7 @@ class AgentCredential:
             "enabled": self.enabled,
             "active": self.active,
             "agent_sync_state": self.agent_sync_state,
+            "grace_ends_at": self.grace_ends_at,
         }
 
 
@@ -208,6 +227,8 @@ class TokenStore:
             conn.execute("ALTER TABLE agent_credentials ADD COLUMN agent_token_id TEXT NOT NULL DEFAULT ''")
         if credential_columns and "agent_sync_state" not in credential_columns:
             conn.execute("ALTER TABLE agent_credentials ADD COLUMN agent_sync_state TEXT NOT NULL DEFAULT 'synced'")
+        if credential_columns and "grace_ends_at" not in credential_columns:
+            conn.execute("ALTER TABLE agent_credentials ADD COLUMN grace_ends_at TEXT")
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, timeout=10)
@@ -401,6 +422,104 @@ class TokenStore:
             )
         return self.get_agent_credential(credential_id)  # type: ignore[return-value]
 
+    def generate_agent_credential(
+        self,
+        *,
+        server_id: str,
+        name: str,
+        agent_token_id: str,
+        expires_in_days: int | None = None,
+    ) -> tuple[AgentCredential, str]:
+        """Agent credentialをサーバー側で生成する (発行フローの標準化)。
+
+        生tokenはCSPRNGで生成し、Agent側のconfig.ymlへ配布する。
+        戻り値の生値は一度きりの表示用。
+        """
+        raw = generate_token()
+        credential = self.create_agent_credential(server_id, name, raw, agent_token_id=agent_token_id, expires_in_days=expires_in_days)
+        credential.token_raw = raw
+        return credential, raw
+
+    def rotate_agent_credential(
+        self,
+        old_credential_id: str,
+        *,
+        grace_period_days: int = 7,
+        rotated_by: str | None = None,
+        expires_in_days: int | None = None,
+    ) -> tuple[AgentCredential, str]:
+        """Agent credentialをローテーションする。
+
+        新しいcredentialを生成し、旧credentialはgrace_period_daysの間グラ期間として
+        有効化したまま残す (復旧・再同期の猶予)。グラ期間経過後はactive=Falseとなり、
+        sweepで完全失効 (enabled=0) する。
+        """
+        old = self.get_agent_credential(old_credential_id)
+        if old is None:
+            raise ValueError(f"Agent credentialが見つかりません: {old_credential_id}")
+        if not old.enabled:
+            raise ValueError(f"Agent credentialは既に無効です: {old_credential_id}")
+
+        rotation_id = "agr_" + secrets.token_hex(8)
+        new_id = "agt_" + secrets.token_hex(8)
+        raw = generate_token()
+        now = now_iso()
+        grace_ends = expiry_iso(grace_period_days)
+        new_expires = expiry_iso(expires_in_days) if expires_in_days else None
+
+        with self._lock, self._connect() as conn:
+            for _ in range(5):
+                try:
+                    conn.execute(
+                        "INSERT INTO agent_credentials (id, server_id, name, agent_token_id, token_raw, created_at, expires_at, enabled) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, 1)",
+                        (new_id, old.server_id, old.name, old.agent_token_id, raw, now, new_expires),
+                    )
+                    break
+                except sqlite3.IntegrityError:
+                    continue
+            else:
+                raise RuntimeError("Agent credentialのローテーションに失敗しました")
+
+            # 旧credentialにグラ期間を設定 (グラ期間中はenabledのまま残す)
+            conn.execute("UPDATE agent_credentials SET grace_ends_at = ? WHERE id = ?", (grace_ends, old_credential_id))
+
+            # ローテーション履歴を記録
+            conn.execute(
+                """
+                INSERT INTO agent_credential_rotations
+                (id, old_credential_id, new_credential_id, rotated_at, grace_ends_at, rotated_by)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (rotation_id, old_credential_id, new_id, now, grace_ends, rotated_by),
+            )
+
+        new_credential = self.get_agent_credential(new_id)
+        if new_credential is None:
+            raise RuntimeError("Agent credentialローテーション後の取得に失敗しました")
+        new_credential.token_raw = raw
+        return new_credential, raw
+
+    def disable_expired_grace_agent_credentials(self) -> int:
+        """グラ期間を経過した旧credentialを一括無効化する (完全失効)。"""
+        with self._lock, self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE agent_credentials SET enabled = 0 "
+                "WHERE enabled = 1 AND grace_ends_at IS NOT NULL AND grace_ends_at <= ?",
+                (now_iso(),),
+            )
+            return cur.rowcount
+
+    def get_agent_credential_rotations(self, credential_id: str) -> list[dict[str, Any]]:
+        """credentialに関係するローテーション履歴を返す (旧/新の両方向)。"""
+        with self._lock, self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM agent_credential_rotations "
+                "WHERE old_credential_id = ? OR new_credential_id = ? ORDER BY rotated_at DESC",
+                (credential_id, credential_id),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def get_agent_credential(self, credential_id: str) -> AgentCredential | None:
         with self._lock, self._connect() as conn:
             row = conn.execute("SELECT * FROM agent_credentials WHERE id=?", (credential_id,)).fetchone()
@@ -410,7 +529,9 @@ class TokenStore:
         with self._lock, self._connect() as conn:
             row = conn.execute(
                 "SELECT * FROM agent_credentials WHERE server_id=? AND enabled=1 "
-                "ORDER BY created_at DESC LIMIT 1",
+                # rowid DESC: 同一秒に作成された新旧credential (ローテーション中) で
+                # created_at の並びが不定になるため、挿入順が新しい方を優先する
+                "ORDER BY created_at DESC, rowid DESC LIMIT 1",
                 (server_id,),
             ).fetchone()
         credential = self._row_to_agent_credential(row) if row else None
@@ -448,6 +569,7 @@ class TokenStore:
             id=row["id"], server_id=row["server_id"], name=row["name"], agent_token_id=row["agent_token_id"], token_raw=row["token_raw"],
             created_at=row["created_at"], expires_at=row["expires_at"], enabled=bool(row["enabled"]),
             agent_sync_state=row["agent_sync_state"] if "agent_sync_state" in keys else "synced",
+            grace_ends_at=row["grace_ends_at"] if "grace_ends_at" in keys else None,
         )
 
     def list_permissions(self, principal_id: str | None = None) -> list[dict[str, Any]]:

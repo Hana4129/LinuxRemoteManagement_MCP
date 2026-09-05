@@ -13,6 +13,12 @@
 - POST /api/tokens/{id}/revoke  失効
 - DEL  /api/tokens/{id}       削除
 - POST /api/tokens/cleanup-grace-periods  グラ期間経過トークン一括無効化
+- POST /api/agent-credentials           Agent credential登録 (Agent側生成token)
+- POST /api/agent-credentials/generate  Agent credential生成 (サーバー側で発行、生値は一度だけ返す)
+- POST /api/agent-credentials/{id}/revoke  失効 (Agent失効同期つき)
+- POST /api/agent-credentials/{id}/rotate  ローテーション (グラ期間つき)
+- GET  /api/agent-credentials/{id}/rotations  ローテーション履歴
+- POST /api/agent-credentials/cleanup-grace-periods  グラ期間経過credential一括無効化
 """
 
 from __future__ import annotations
@@ -93,6 +99,20 @@ class AgentCredentialCreateRequest(BaseModel):
     token: str = Field(..., min_length=1, description="Agent側に設定済みのBearer token")
     agent_token_id: str = Field(..., min_length=1, max_length=100, description="Agent設定内のtoken id")
     expires_in_days: int | None = Field(default=None, ge=1, le=3650)
+
+
+class AgentCredentialGenerateRequest(BaseModel):
+    """サーバー側でAgent credentialを生成するリクエスト (秘密値の手入力不要)。"""
+
+    server_id: str = Field(..., min_length=1, max_length=100)
+    name: str = Field(..., min_length=1, max_length=100)
+    agent_token_id: str = Field(..., min_length=1, max_length=100, description="Agent設定内のtoken id")
+    expires_in_days: int | None = Field(default=None, ge=1, le=3650)
+
+
+class AgentCredentialRotateRequest(BaseModel):
+    grace_period_days: int = Field(default=7, ge=1, le=90, description="新旧credentialのグラ期間(日)")
+    expires_in_days: int | None = Field(default=None, ge=1, le=3650, description="新しいcredentialの有効期限(日)")
 
 
 class TokenRotateRequest(BaseModel):
@@ -320,6 +340,30 @@ def register_agent_credential(request: Request, payload: AgentCredentialCreateRe
     return {"credential": credential.to_dict()}
 
 
+@agent_credentials_router.post("/generate")
+def generate_agent_credential(request: Request, payload: AgentCredentialGenerateRequest) -> dict[str, Any]:
+    """Agent credentialをサーバー側で生成する (発行フローの標準化)。
+
+    生tokenを手入力せず、CSPRNGで生成する。生値はレスポンスに一度だけ返し、
+    Agent側のconfig.ymlへ配布する。一覧には生値を再表示しない。
+    """
+    _require_admin(request)
+    _server_or_404(request, payload.server_id)
+    store: TokenStore = request.app.state.store
+    credential, raw = store.generate_agent_credential(
+        server_id=payload.server_id,
+        name=payload.name,
+        agent_token_id=payload.agent_token_id,
+        expires_in_days=payload.expires_in_days,
+    )
+    _audit_management(
+        request,
+        "generate_agent_credential",
+        {"credential_id": credential.id, "server_id": payload.server_id, "agent_token_id": payload.agent_token_id},
+    )
+    return {"credential": credential.to_dict(), "token": raw}
+
+
 @agent_credentials_router.get("")
 def list_agent_credentials(request: Request) -> dict[str, Any]:
     store: TokenStore = request.app.state.store
@@ -468,6 +512,71 @@ def resync_agent_credential_revocation(request: Request, credential_id: str) -> 
         {"credential_id": credential_id, "agent_token_id": credential.agent_token_id, "synced": True},
     )
     return {"id": credential_id, "agent_token_id": credential.agent_token_id, "synced": True, "sync_state": "synced"}
+
+
+@agent_credentials_router.post("/{credential_id}/rotate")
+def rotate_agent_credential(request: Request, credential_id: str, payload: AgentCredentialRotateRequest) -> dict[str, Any]:
+    """Agent credentialをローテーションする (グラ期間つき)。
+
+    新しいcredentialを生成し、生値を一度だけ返す。旧credentialは
+    grace_period_daysの間グラ期間として残り、期間経過後は使用不可
+    (active=False)。/api/agent-credentials/cleanup-grace-periods で
+    完全失効 (enabled=0) させる。
+    """
+    _require_admin(request)
+    store: TokenStore = request.app.state.store
+    if store.get_agent_credential(credential_id) is None:
+        raise HTTPException(status_code=404, detail=f"Agent credentialが見つかりません: {credential_id}")
+    try:
+        new_credential, raw = store.rotate_agent_credential(
+            credential_id,
+            grace_period_days=payload.grace_period_days,
+            rotated_by=_audit_actor(),
+            expires_in_days=payload.expires_in_days,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    old_credential = store.get_agent_credential(credential_id)
+    _audit_management(
+        request,
+        "rotate_agent_credential",
+        {
+            "old_credential_id": credential_id,
+            "new_credential_id": new_credential.id,
+            "server_id": new_credential.server_id,
+            "grace_period_days": payload.grace_period_days,
+        },
+    )
+    log.info(
+        "Agent credentialローテーション old_id=%s new_id=%s grace_days=%d",
+        credential_id, new_credential.id, payload.grace_period_days,
+    )
+    return {
+        "token": raw,
+        "credential": new_credential.to_dict(),
+        "old_credential": old_credential.to_dict() if old_credential else None,
+    }
+
+
+@agent_credentials_router.get("/{credential_id}/rotations")
+def get_agent_credential_rotation_history(request: Request, credential_id: str) -> dict[str, Any]:
+    """Agent credentialのローテーション履歴を取得する。"""
+    _require_admin(request)
+    store: TokenStore = request.app.state.store
+    if store.get_agent_credential(credential_id) is None:
+        raise HTTPException(status_code=404, detail=f"Agent credentialが見つかりません: {credential_id}")
+    return {"credential_id": credential_id, "rotations": store.get_agent_credential_rotations(credential_id)}
+
+
+@agent_credentials_router.post("/cleanup-grace-periods")
+def cleanup_agent_credential_grace_periods(request: Request) -> dict[str, Any]:
+    """グラ期間を経過した旧Agent credentialを一括無効化する (完全失効)。"""
+    _require_admin(request)
+    store: TokenStore = request.app.state.store
+    count = store.disable_expired_grace_agent_credentials()
+    if count:
+        _audit_management(request, "cleanup_agent_credential_grace_periods", {"cleaned": count})
+    return {"cleaned": count}
 
 
 @tokens_router.post("/import")
