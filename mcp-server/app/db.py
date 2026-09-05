@@ -70,7 +70,8 @@ CREATE TABLE IF NOT EXISTS agent_credentials (
     token_raw     TEXT NOT NULL,
     created_at    TEXT NOT NULL,
     expires_at    TEXT,
-    enabled       INTEGER NOT NULL DEFAULT 1
+    enabled       INTEGER NOT NULL DEFAULT 1,
+    agent_sync_state TEXT NOT NULL DEFAULT 'synced'
 );
 
 CREATE TABLE IF NOT EXISTS token_rotations (
@@ -151,6 +152,7 @@ class AgentCredential:
     created_at: str
     expires_at: str | None
     enabled: bool
+    agent_sync_state: str = "synced"
 
     @property
     def active(self) -> bool:
@@ -174,6 +176,7 @@ class AgentCredential:
             "expires_at": self.expires_at,
             "enabled": self.enabled,
             "active": self.active,
+            "agent_sync_state": self.agent_sync_state,
         }
 
 
@@ -203,6 +206,8 @@ class TokenStore:
         credential_columns = {row["name"] for row in conn.execute("PRAGMA table_info(agent_credentials)")}
         if credential_columns and "agent_token_id" not in credential_columns:
             conn.execute("ALTER TABLE agent_credentials ADD COLUMN agent_token_id TEXT NOT NULL DEFAULT ''")
+        if credential_columns and "agent_sync_state" not in credential_columns:
+            conn.execute("ALTER TABLE agent_credentials ADD COLUMN agent_sync_state TEXT NOT NULL DEFAULT 'synced'")
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, timeout=10)
@@ -421,11 +426,28 @@ class TokenStore:
             cur = conn.execute("UPDATE agent_credentials SET enabled=0 WHERE id=? AND enabled=1", (credential_id,))
             return cur.rowcount > 0
 
+    def set_agent_credential_sync_state(self, credential_id: str, state: str) -> None:
+        """Agent失効同期の状態を更新する (synced / pending / skipped)。"""
+        with self._lock, self._connect() as conn:
+            conn.execute("UPDATE agent_credentials SET agent_sync_state=? WHERE id=?", (state, credential_id))
+
+    def list_pending_revocation_syncs(self) -> list[AgentCredential]:
+        """Agentへの失効同期が未完了 (pending) のcredential一覧を返す。"""
+        with self._lock, self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM agent_credentials "
+                "WHERE enabled=0 AND agent_sync_state='pending' AND agent_token_id<>'' "
+                "ORDER BY created_at ASC"
+            ).fetchall()
+        return [self._row_to_agent_credential(row) for row in rows]
+
     @staticmethod
     def _row_to_agent_credential(row: sqlite3.Row) -> AgentCredential:
+        keys = set(row.keys())
         return AgentCredential(
             id=row["id"], server_id=row["server_id"], name=row["name"], agent_token_id=row["agent_token_id"], token_raw=row["token_raw"],
             created_at=row["created_at"], expires_at=row["expires_at"], enabled=bool(row["enabled"]),
+            agent_sync_state=row["agent_sync_state"] if "agent_sync_state" in keys else "synced",
         )
 
     def list_permissions(self, principal_id: str | None = None) -> list[dict[str, Any]]:

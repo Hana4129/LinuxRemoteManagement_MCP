@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -394,3 +395,141 @@ def test_oidc_known_subject_allowed(tmp_path, store, monkeypatch):
     app = create_app(config, store=store)
     with TestClient(app) as client:
         assert client.get("/api/meta", headers={"Authorization": "Bearer known-sub"}).status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Agent失効同期の障害時運用 (fail-closed / 冪等性 / 再送)
+# ---------------------------------------------------------------------------
+
+
+def _admin_headers() -> dict[str, str]:
+    return {"Authorization": "Basic " + base64.b64encode(b"admin:secret").decode("ascii")}
+
+
+def _register_agent_credential(client: TestClient, headers: dict[str, str]) -> str:
+    response = client.post(
+        "/api/agent-credentials",
+        json={"server_id": "dev", "name": "dev-agent", "token": "agent-secret", "agent_token_id": "agent-1"},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    return response.json()["credential"]["id"]
+
+
+def _agent_down(*args, **kwargs):
+    raise httpx.ConnectError("connection refused")
+
+
+def _agent_ok(*args, **kwargs):
+    return type("Response", (), {"status_code": 200})()
+
+
+def test_revoke_agent_credential_fail_closed_when_agent_down(tmp_path, store, monkeypatch):
+    """Agent停止中でもローカル失効は完了し、sync_state=pending として記録される (fail-closed)。"""
+    app = create_app(_config(tmp_path, username="admin", password="secret", admin_token="admin-secret"), store=store)
+    headers = _admin_headers()
+    monkeypatch.setattr("httpx.post", _agent_down)
+    with TestClient(app) as client:
+        credential_id = _register_agent_credential(client, headers)
+        response = client.post(f"/api/agent-credentials/{credential_id}/revoke", headers=headers)
+        assert response.status_code == 202
+        data = response.json()
+        assert data["revoked"] is True
+        assert data["agent_synced"] is False
+        assert data["sync_state"] == "pending"
+        assert "connection refused" in data["sync_detail"]
+    credential = store.get_agent_credential(credential_id)
+    assert credential.enabled is False
+    assert credential.agent_sync_state == "pending"
+    assert [c.id for c in store.list_pending_revocation_syncs()] == [credential_id]
+
+
+def test_revoke_agent_credential_idempotent_when_agent_missing_token(tmp_path, store, monkeypatch):
+    """Agentが404を返す場合 (既に失効済み/未登録) も同期成功として扱い、冪等に完了する。"""
+    app = create_app(_config(tmp_path, username="admin", password="secret", admin_token="admin-secret"), store=store)
+    headers = _admin_headers()
+    monkeypatch.setattr("httpx.post", lambda *args, **kwargs: type("Response", (), {"status_code": 404})())
+    with TestClient(app) as client:
+        credential_id = _register_agent_credential(client, headers)
+        response = client.post(f"/api/agent-credentials/{credential_id}/revoke", headers=headers)
+        assert response.status_code == 200
+        data = response.json()
+        assert data["revoked"] is True
+        assert data["agent_synced"] is True
+        assert data["sync_state"] == "synced"
+    assert store.get_agent_credential(credential_id).agent_sync_state == "synced"
+    assert store.list_pending_revocation_syncs() == []
+
+
+def test_resync_pending_revocations_after_agent_recovery(tmp_path, store, monkeypatch):
+    """Agent復旧後にresync-pendingで失効が再送され、pendingが解消される。"""
+    app = create_app(_config(tmp_path, username="admin", password="secret", admin_token="admin-secret"), store=store)
+    headers = _admin_headers()
+    monkeypatch.setattr("httpx.post", _agent_down)
+    with TestClient(app) as client:
+        credential_id = _register_agent_credential(client, headers)
+        client.post(f"/api/agent-credentials/{credential_id}/revoke", headers=headers)
+        assert store.get_agent_credential(credential_id).agent_sync_state == "pending"
+        # Agent復旧
+        monkeypatch.setattr("httpx.post", _agent_ok)
+        response = client.post("/api/agent-credentials/resync-pending", headers=headers)
+        assert response.status_code == 200
+        body = response.json()
+        assert body["remaining_pending"] == 0
+        assert len(body["results"]) == 1
+        result = body["results"][0]
+        assert result["id"] == credential_id
+        assert result["agent_token_id"] == "agent-1"
+        assert result["synced"] is True
+        assert result["sync_state"] == "synced"
+    assert store.get_agent_credential(credential_id).agent_sync_state == "synced"
+    assert store.list_pending_revocation_syncs() == []
+
+
+def test_resync_pending_keeps_pending_on_failure(tmp_path, store, monkeypatch):
+    """再送でもAgentが停止中ならpendingのまま維持される (fail-closedの継続)。"""
+    app = create_app(_config(tmp_path, username="admin", password="secret", admin_token="admin-secret"), store=store)
+    headers = _admin_headers()
+    monkeypatch.setattr("httpx.post", _agent_down)
+    with TestClient(app) as client:
+        credential_id = _register_agent_credential(client, headers)
+        client.post(f"/api/agent-credentials/{credential_id}/revoke", headers=headers)
+        response = client.post("/api/agent-credentials/resync-pending", headers=headers)
+        assert response.status_code == 200
+        body = response.json()
+        assert body["remaining_pending"] == 1
+        assert body["results"][0]["synced"] is False
+        assert body["results"][0]["sync_state"] == "pending"
+    assert store.get_agent_credential(credential_id).agent_sync_state == "pending"
+    assert [c.id for c in store.list_pending_revocation_syncs()] == [credential_id]
+
+
+def test_resync_single_agent_credential(tmp_path, store, monkeypatch):
+    """単一credentialのresync: Agent停止中は502、復旧後はsyncedになる。"""
+    app = create_app(_config(tmp_path, username="admin", password="secret", admin_token="admin-secret"), store=store)
+    headers = _admin_headers()
+    monkeypatch.setattr("httpx.post", _agent_down)
+    with TestClient(app) as client:
+        credential_id = _register_agent_credential(client, headers)
+        client.post(f"/api/agent-credentials/{credential_id}/revoke", headers=headers)
+        # Agent停止中のresyncは502
+        failed = client.post(f"/api/agent-credentials/{credential_id}/resync", headers=headers)
+        assert failed.status_code == 502
+        assert store.get_agent_credential(credential_id).agent_sync_state == "pending"
+        # Agent復旧後のresyncは成功
+        monkeypatch.setattr("httpx.post", _agent_ok)
+        response = client.post(f"/api/agent-credentials/{credential_id}/resync", headers=headers)
+        assert response.status_code == 200
+        assert response.json()["sync_state"] == "synced"
+    assert store.get_agent_credential(credential_id).agent_sync_state == "synced"
+
+
+def test_resync_rejects_active_credential(tmp_path, store, monkeypatch):
+    """失効していないcredentialへのresyncは409で拒否される。"""
+    app = create_app(_config(tmp_path, username="admin", password="secret", admin_token="admin-secret"), store=store)
+    headers = _admin_headers()
+    monkeypatch.setattr("httpx.post", _agent_down)
+    with TestClient(app) as client:
+        credential_id = _register_agent_credential(client, headers)
+        response = client.post(f"/api/agent-credentials/{credential_id}/resync", headers=headers)
+        assert response.status_code == 409

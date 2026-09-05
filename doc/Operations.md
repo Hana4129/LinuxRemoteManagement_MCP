@@ -169,6 +169,29 @@ tail -f mcp-server/data/mcp_audit.log
 tail -f /var/log/linux-agent/audit.log
 ```
 
+### 3.4 Agent失効同期のpending解消
+
+Agent停止中にAgent credentialを失効した場合、MCP Server側は即座にローカル失効を完了させ (fail-closed)、同期状態が `pending` として記録される。Agent復旧後に以下の手順でAgentへ失効を再送する。
+
+```bash
+# pendingのcredentialを一括再送 (Agent復旧後に実行)
+curl -u admin:password -X POST https://console.example/api/agent-credentials/resync-pending
+
+# 個別に再送
+curl -u admin:password -X POST https://console.example/api/agent-credentials/{credential_id}/resync
+```
+
+| 項目 | 動作 |
+|------|------|
+| 同期成功 (HTTP 200/202/204) | `agent_sync_state` が `synced` に更新される |
+| 同期対象なし (HTTP 404) | 「既に失効済み/未登録」として `synced` に更新される (冪等) |
+| 到達不能・HTTP 4xx/5xx | `pending` のまま維持される (fail-closed継続) |
+| 失効していないcredential | 409で拒否される |
+
+- 再送は冪等であり、複数回実行しても安全
+- 定期実行する場合はsystemd timerまたはcronで `resync-pending` を呼び出す
+- pending一覧は `GET /api/agent-credentials` の `agent_sync_state` で確認できる
+
 ---
 
 ## 4. バックアップと復旧

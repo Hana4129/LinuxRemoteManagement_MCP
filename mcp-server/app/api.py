@@ -21,6 +21,7 @@ import logging
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from . import __version__
@@ -325,31 +326,148 @@ def list_agent_credentials(request: Request) -> dict[str, Any]:
     return {"credentials": [credential.to_dict() for credential in store.list_agent_credentials()]}
 
 
-@agent_credentials_router.post("/{credential_id}/revoke")
-def revoke_agent_credential(request: Request, credential_id: str) -> dict[str, Any]:
-    _require_admin(request)
-    store: TokenStore = request.app.state.store
-    if store.get_agent_credential(credential_id) is None:
-        raise HTTPException(status_code=404, detail=f"Agent credentialが見つかりません: {credential_id}")
-    credential = store.get_agent_credential(credential_id)
-    if not credential.agent_token_id or not request.app.state.config.agent.admin_token:
-        raise HTTPException(status_code=503, detail="Agent失効同期用のcredential設定がありません")
-    server = _server_or_404(request, credential.server_id)
+def _sync_revocation_to_agent(request: Request, server: ServerConfig, agent_token_id: str) -> tuple[bool, str]:
+    """Agentの管理失効endpointへ失効要求を同期する。
+
+    戻り値は (同期済みか, 詳細メッセージ)。HTTP 404 は「Agent上に該当tokenが
+    存在しない (失効済みまたは未登録)」として同期成功とみなし、
+    同じ失効要求の再送に対する冪等性を保証する。
+    """
     import httpx
+
+    cfg = request.app.state.config
     try:
         response = httpx.post(
-            server.url.rstrip("/") + "/v1/admin/tokens/" + credential.agent_token_id + "/revoke",
-            headers={"X-LRM-Admin-Token": request.app.state.config.agent.admin_token},
-            verify=request.app.state.config.agent.tls_verify,
-            timeout=request.app.state.config.agent.timeout_seconds,
+            server.url.rstrip("/") + "/v1/admin/tokens/" + agent_token_id + "/revoke",
+            headers={"X-LRM-Admin-Token": cfg.agent.admin_token},
+            verify=cfg.agent.tls_verify,
+            timeout=cfg.agent.timeout_seconds,
         )
     except httpx.HTTPError as exc:
-        raise HTTPException(status_code=502, detail=f"Agent失効同期に失敗しました: {exc}") from exc
-    if response.status_code >= 400:
-        raise HTTPException(status_code=502, detail=f"Agent失効同期に失敗しました (HTTP {response.status_code})")
+        return False, str(exc)
+    if response.status_code in (200, 202, 204):
+        return True, "ok"
+    if response.status_code == 404:
+        return True, "already-revoked-or-missing"
+    return False, f"HTTP {response.status_code}"
+
+
+@agent_credentials_router.post("/{credential_id}/revoke")
+def revoke_agent_credential(request: Request, credential_id: str) -> dict[str, Any]:
+    """Agent credentialを失効する (fail-closed)。
+
+    Agentへの失効同期に失敗した場合 (Agent停止中など) でも、MCP Server側では
+    即座にcredentialを無効化し、sync_state=pending として記録する。Agent復旧後に
+    /api/agent-credentials/{id}/resync または /api/agent-credentials/resync-pending
+    で再送する。
+    """
+    _require_admin(request)
+    store: TokenStore = request.app.state.store
+    credential = store.get_agent_credential(credential_id)
+    if credential is None:
+        raise HTTPException(status_code=404, detail=f"Agent credentialが見つかりません: {credential_id}")
+    if not credential.agent_token_id or not request.app.state.config.agent.admin_token:
+        # Agent失効同期の対象外: ローカル失効のみ実施する
+        revoked = store.revoke_agent_credential(credential_id)
+        store.set_agent_credential_sync_state(credential_id, "skipped")
+        _audit_management(
+            request,
+            "revoke_agent_credential",
+            {"credential_id": credential_id, "agent_token_id": credential.agent_token_id, "agent_synced": False, "sync_state": "skipped", "revoked": revoked},
+        )
+        return {"revoked": revoked, "id": credential_id, "agent_synced": False, "sync_state": "skipped"}
+    server = _server_or_404(request, credential.server_id)
+    synced, detail = _sync_revocation_to_agent(request, server, credential.agent_token_id)
+    # fail-closed: 同期成否にかかわらずローカルは必ず失効させる
     revoked = store.revoke_agent_credential(credential_id)
-    _audit_management(request, "revoke_agent_credential", {"credential_id": credential_id, "agent_token_id": credential.agent_token_id, "agent_synced": True, "revoked": revoked})
-    return {"revoked": revoked, "id": credential_id, "agent_synced": True}
+    sync_state = "synced" if synced else "pending"
+    store.set_agent_credential_sync_state(credential_id, sync_state)
+    _audit_management(
+        request,
+        "revoke_agent_credential",
+        {"credential_id": credential_id, "agent_token_id": credential.agent_token_id, "agent_synced": synced, "sync_state": sync_state, "revoked": revoked, "sync_detail": detail},
+    )
+    payload: dict[str, Any] = {"revoked": revoked, "id": credential_id, "agent_synced": synced, "sync_state": sync_state}
+    if not synced:
+        payload["sync_detail"] = detail
+        return JSONResponse(status_code=202, content=payload)
+    return payload
+
+
+@agent_credentials_router.post("/resync-pending")
+def resync_pending_agent_credential_revocations(request: Request) -> dict[str, Any]:
+    """Agent停止中等でpendingになっている失効をAgentへ一括再送する。
+
+    Agent復旧後に管理コンソール、systemd timer、cronなどから呼び出すことを想定。
+    同じ失効要求を複数回送信してもAgent側は冪等に処理される
+    (404は「既に失効済みまたは未登録」として同期成功扱い)。
+    """
+    _require_admin(request)
+    store: TokenStore = request.app.state.store
+    results: list[dict[str, Any]] = []
+    for credential in store.list_pending_revocation_syncs():
+        server = request.app.state.config.server(credential.server_id)
+        if server is None:
+            results.append(
+                {
+                    "id": credential.id,
+                    "server_id": credential.server_id,
+                    "agent_token_id": credential.agent_token_id,
+                    "synced": False,
+                    "sync_state": "pending",
+                    "detail": f"server設定が見つかりません: {credential.server_id}",
+                }
+            )
+            continue
+        synced, detail = _sync_revocation_to_agent(request, server, credential.agent_token_id)
+        if synced:
+            store.set_agent_credential_sync_state(credential.id, "synced")
+        results.append(
+            {
+                "id": credential.id,
+                "server_id": credential.server_id,
+                "agent_token_id": credential.agent_token_id,
+                "synced": synced,
+                "sync_state": "synced" if synced else "pending",
+                "detail": detail,
+            }
+        )
+    _audit_management(
+        request,
+        "resync_pending_agent_credentials",
+        {"attempted": len(results), "synced": sum(1 for r in results if r["synced"])},
+    )
+    return {"results": results, "remaining_pending": len(store.list_pending_revocation_syncs())}
+
+
+@agent_credentials_router.post("/{credential_id}/resync")
+def resync_agent_credential_revocation(request: Request, credential_id: str) -> dict[str, Any]:
+    """単一credentialのpending失効をAgentへ再送する。"""
+    _require_admin(request)
+    store: TokenStore = request.app.state.store
+    credential = store.get_agent_credential(credential_id)
+    if credential is None:
+        raise HTTPException(status_code=404, detail=f"Agent credentialが見つかりません: {credential_id}")
+    if not credential.agent_token_id or not request.app.state.config.agent.admin_token:
+        raise HTTPException(status_code=503, detail="Agent失効同期用のcredential設定がありません")
+    if credential.enabled:
+        raise HTTPException(status_code=409, detail="credentialは失効していないためresync対象外です")
+    server = _server_or_404(request, credential.server_id)
+    synced, detail = _sync_revocation_to_agent(request, server, credential.agent_token_id)
+    if not synced:
+        _audit_management(
+            request,
+            "resync_agent_credential_revocation",
+            {"credential_id": credential_id, "agent_token_id": credential.agent_token_id, "synced": False, "sync_detail": detail},
+        )
+        raise HTTPException(status_code=502, detail=f"Agent失効同期に失敗しました: {detail}")
+    store.set_agent_credential_sync_state(credential_id, "synced")
+    _audit_management(
+        request,
+        "resync_agent_credential_revocation",
+        {"credential_id": credential_id, "agent_token_id": credential.agent_token_id, "synced": True},
+    )
+    return {"id": credential_id, "agent_token_id": credential.agent_token_id, "synced": True, "sync_state": "synced"}
 
 
 @tokens_router.post("/import")

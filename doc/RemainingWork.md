@@ -20,7 +20,7 @@ Linux Remote Management MCP の認証・認可分離に関する残作業をま�
 - 管理コンソール静的アセットのバージョン付きキャッシュ制御
 - Basic認証アカウントをadmin principalとして扱う認証主体統一
 - 管理コンソールのMCP Bearerトークン認証 (principal紐付けトークンのRBAC強制・無効/未紐付けトークンの401拒否)
-- Python テスト 104 件
+- Python テスト 110 件
 
 ## 優先度 P0: 本番導入前に必要
 
@@ -206,18 +206,26 @@ principal作成、権限付与/失効、principal無効化、MCP token発行、A
 
 ### 8. 失効同期の障害時運用
 
+**状態: 実装済み (fail-closed + pending再送)。実Agent環境での統合確認が残っている。**
+
 **内容**
 
-- Agent停止中に失効要求が失敗した場合の扱いを決める
-- fail-closedか、同期キューで再試行するかを決める
-- 失効要求の冪等性を保証する
-- Agent復旧時に未反映の失効を再送する
+- Agent停止中に失効要求が失敗した場合の扱い: fail-closedを採用。Agentへの同期に失敗してもMCP Server側のローカル失効は必ず完了させ、`agent_sync_state=pending` として記録する
+- 同期状態はagent_credentialsテーブルの `agent_sync_state` カラム (synced / pending / skipped) で管理し、credential一覧APIで表示する
+- 失効要求の冪等性: Agentが404 (該当tokenが既に失効済みまたは未登録) を返した場合は同期成功として扱う。同じ失効要求の再送は安全
+- Agent復旧時の再送API:
+  - `POST /api/agent-credentials/{id}/resync` (単一credential)
+  - `POST /api/agent-credentials/resync-pending` (pending全件一括)
+- 再送でもAgentに到達できない場合はpendingのまま維持される (fail-closedの継続)
+- 失効していないcredentialへのresyncは409で拒否する
 
 **完了条件**
 
-- Agent停止中でもMCP Server側で利用停止状態を正しく表示できる
-- Agent復旧後に失効が自動的に反映される
-- 同じ失効要求を複数回送っても安全である
+- Agent停止中でもMCP Server側で利用停止状態を正しく表示できる → 実装済み (enabled=0 + sync_state表示)
+- Agent復旧後に失効が自動的に反映される → resync-pendingをsystemd timer / cronから定期実行することで実現 (手順はOperations.md 3.4参照)
+- 同じ失効要求を複数回送っても安全である → 実装済み (404を冪等扱い、再試行テスト6件追加)
+
+残作業は実Agent環境での統合確認 (Agent停止 → 失効 → 復旧 → resyncのE2E) である。
 
 ## 優先度 P2: 運用・品質
 
