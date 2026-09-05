@@ -250,7 +250,7 @@ func (a *Agent) authenticate(r *http.Request) (*tokenEntry, bool) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	for _, t := range a.tokens {
-		if subtle.ConstantTimeCompare([]byte(t.hash), []byte(hashStr)) == 1 {
+		if !t.Disabled && subtle.ConstantTimeCompare([]byte(t.hash), []byte(hashStr)) == 1 {
 			return &t, true
 		}
 	}
