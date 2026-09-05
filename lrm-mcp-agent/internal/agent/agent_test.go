@@ -23,6 +23,7 @@ func newTestAgent() *Agent {
 			Listen:  ":8443",
 			DataDir: "./data",
 			Env:     "test",
+			AdminTokenHash: hashToken("admin-secret"),
 			TLS: config.TLSConfig{
 				AutoCertFile: "./data/server.crt",
 				AutoKeyFile:  "./data/server.key",
@@ -261,6 +262,40 @@ func TestAuthenticate_WrongFormat(t *testing.T) {
 
 	if rr.Code != http.StatusUnauthorized {
 		t.Errorf("expected 401 for wrong auth format, got %d", rr.Code)
+	}
+}
+
+func TestAdminTokenRevoke_DisablesTokenImmediately(t *testing.T) {
+	agent := newTestAgent()
+	defer agent.Shutdown()
+	handler := agent.Handler()
+
+	revoke := httptest.NewRequest("POST", "/v1/admin/tokens/ro-token/revoke", nil)
+	revoke.Header.Set("X-LRM-Admin-Token", "admin-secret")
+	revokeResponse := httptest.NewRecorder()
+	handler.ServeHTTP(revokeResponse, revoke)
+	if revokeResponse.Code != http.StatusOK {
+		t.Fatalf("expected admin revoke to succeed, got %d", revokeResponse.Code)
+	}
+
+	request := httptest.NewRequest("GET", "/v1/system", nil)
+	request.Header.Set("Authorization", "Bearer ro-secret")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Errorf("expected revoked token to receive 401, got %d", response.Code)
+	}
+}
+
+func TestAdminTokenRevoke_InvalidSecret(t *testing.T) {
+	agent := newTestAgent()
+	defer agent.Shutdown()
+	revoke := httptest.NewRequest("POST", "/v1/admin/tokens/ro-token/revoke", nil)
+	revoke.Header.Set("X-LRM-Admin-Token", "wrong-secret")
+	response := httptest.NewRecorder()
+	agent.Handler().ServeHTTP(response, revoke)
+	if response.Code != http.StatusUnauthorized {
+		t.Errorf("expected invalid admin secret to receive 401, got %d", response.Code)
 	}
 }
 

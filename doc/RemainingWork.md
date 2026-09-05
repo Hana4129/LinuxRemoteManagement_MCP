@@ -11,6 +11,7 @@ Linux Remote Management MCP の認証・認可分離に関する残作業をま�
 - OIDC JWT の署名、issuer、audience、期限、subject 検証
 - Agent 接続 credential の分離管理
 - Agent token の管理 endpoint による即時失効
+- Agent管理失効 endpoint のGoテストを追加（ローカル環境ではGo未実行）
 - 管理操作の admin role 制限
 - 管理コンソールのAccessタブによるprincipal・権限・Agent credential管理
 - 承認APIで認証済みprincipalを承認者として記録
