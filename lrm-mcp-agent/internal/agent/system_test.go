@@ -32,9 +32,9 @@ func TestReadOS(t *testing.T) {
 	if os == "" {
 		t.Error("expected non-empty OS string")
 	}
-	// Should contain "Linux" or be "Linux"
-	if !strings.Contains(os, "Linux") {
-		t.Errorf("expected OS to contain 'Linux', got %q", os)
+	// Linux distributions identify themselves by distro name (for example Ubuntu).
+	if os == "" || (!strings.Contains(strings.ToLower(os), "linux") && !strings.Contains(strings.ToLower(os), "ubuntu")) {
+		t.Errorf("expected a Linux distribution name, got %q", os)
 	}
 }
 

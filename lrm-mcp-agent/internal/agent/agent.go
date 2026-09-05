@@ -184,6 +184,7 @@ func (a *Agent) handleAdminToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tokenID := strings.TrimPrefix(r.URL.Path, "/v1/admin/tokens/")
+	tokenID = strings.TrimSuffix(tokenID, "/revoke")
 	if tokenID == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "token id required"})
 		return
