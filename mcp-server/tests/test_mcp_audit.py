@@ -62,3 +62,84 @@ def test_close_is_idempotent(audit: McpAudit):
     audit.log(actor="mcp", action="x", ok=True)
     audit.close()
     audit.close()  # 2回呼んでもエラーにならない
+
+
+def test_siem_webhook_receives_entry(tmp_path, monkeypatch):
+    """siem_webhook が設定されている場合、各ログエントリが webhook へ POST される。"""
+    posted: list = []
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        posted.append({"url": url, "json": json, "headers": headers})
+
+        class _Resp:
+            status_code = 200
+
+        return _Resp()
+
+    monkeypatch.setattr("httpx.post", fake_post)
+    audit = McpAudit(tmp_path / "audit.jsonl", siem_webhook="https://siem.example/ingest")
+    audit.log(actor="mcp:ci", action="get_system_info", server="dev-web-01", ok=True, duration_ms=12.3)
+    audit.close()
+    # 非同期スレッドの完了を待つ
+    import time
+    time.sleep(0.2)
+    assert len(posted) == 1
+    assert posted[0]["url"] == "https://siem.example/ingest"
+    assert posted[0]["json"]["action"] == "get_system_info"
+    assert posted[0]["json"]["server"] == "dev-web-01"
+
+
+def test_siem_webhook_uses_api_key(tmp_path, monkeypatch):
+    """siem_api_key が設定されている場合、Authorization ヘッダーが付与される。"""
+    posted: list = []
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        posted.append(headers)
+
+        class _Resp:
+            status_code = 200
+
+        return _Resp()
+
+    monkeypatch.setattr("httpx.post", fake_post)
+    audit = McpAudit(tmp_path / "audit.jsonl", siem_webhook="https://siem.example/ingest", siem_api_key="secret-key")
+    audit.log(actor="mcp", action="x", ok=True)
+    audit.close()
+    import time
+    time.sleep(0.2)
+    assert posted[0]["Authorization"] == "Bearer secret-key"
+
+
+def test_siem_webhook_failure_does_not_break_logging(tmp_path, monkeypatch):
+    """webhook 送信が失敗してもログファイルへの書き込みは成功する。"""
+    def fake_post(url, json=None, headers=None, timeout=None):
+        raise RuntimeError("network error")
+
+    monkeypatch.setattr("httpx.post", fake_post)
+    audit = McpAudit(tmp_path / "audit.jsonl", siem_webhook="https://siem.example/ingest")
+    audit.log(actor="mcp", action="get_system_info", ok=True)
+    entries = audit.read_entries()
+    assert len(entries) == 1
+    assert entries[0]["action"] == "get_system_info"
+    audit.close()
+
+
+def test_no_siem_webhook_no_post(tmp_path, monkeypatch):
+    """siem_webhook が空の場合、httpx.post は呼ばれない。"""
+    called = []
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        called.append(True)
+
+        class _Resp:
+            status_code = 200
+
+        return _Resp()
+
+    monkeypatch.setattr("httpx.post", fake_post)
+    audit = McpAudit(tmp_path / "audit.jsonl")
+    audit.log(actor="mcp", action="x", ok=True)
+    audit.close()
+    import time
+    time.sleep(0.1)
+    assert called == []

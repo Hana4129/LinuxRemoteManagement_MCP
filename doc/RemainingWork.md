@@ -304,14 +304,15 @@ principal作成、権限付与/失効、principal無効化、MCP token発行、A
 4. 管理コンソールUIへprincipal管理を追加 → **実装済み** (Accessタブ)
 5. Agent credentialの発行・配布・再試行を整備 → **実装済み** (生成/ローテーション/env参照/失効同期のfail-closedと再送)
 6. systemd、firewall、VPN、リバースプロキシを構成 → systemd unit・リバースプロキシ設定例は実装済み。**firewall/VPN/ACLの適用は実環境作業**
-7. 統合テストとセキュリティレビューを実施 → 単体・統合テストは拡充済み (Python 142件 / Go全パッケージ)。**3.1節の別LinuxサーバーでのAgent統合検証が残る**
+7. 統合テストとセキュリティレビューを実施 → 単体・統合テストは拡充済み (Python 149件 / Go全パッケージ)。**3.1節の別LinuxサーバーでのAgent統合検証が残る**
+8. SIEM webhook による監査ログ転送 → **実装済み** (`mcp_audit.py` / `config.yml` / `doc/Operations.md` 3.5節)
 
 ## 残タスク (全て実環境で必要な項目)
 
 - P0-1: 本番IdPの実トークンでOIDCログイン確認
 - P0-2: MCP Server→実AgentへのmTLS接続（通常操作と失効同期）
 - 3.1: 別LinuxサーバーでのAgent統合検証（token権限分離・失効・reload・監査ログ）
-- P1-4〜P1-6: 実ブラウザでのUI統合確認、OIDC実環境での承認統合、SIEM転送確認
+- P1-4〜P1-6: 実ブラウザでのUI統合確認、OIDC実環境での承認統合
 - P2-9〜P2-10: 導入環境でのsystemd確認、firewall/VPN/ACL適用
 - P2-11: 実IdPでのブラウザログイン確認、リバースプロキシTLS終端位置の確認
 - P2-12: mTLSの実環境接続テスト

@@ -71,6 +71,8 @@ class ConsoleConfig:
     oidc_token_endpoint: str = ""
     session_cookie_secure: bool = True
     session_lifetime_minutes: int = 480
+    siem_webhook: str = ""
+    siem_api_key: str = ""
     require_approval: bool = True
     approval_ttl_minutes: int = 15
     mcp_audit: bool = True
@@ -169,6 +171,8 @@ class AppConfig:
                 "audit_max_size_mb": self.console.audit_max_size_mb,
                 "audit_max_backups": self.console.audit_max_backups,
                 "audit_compress": self.console.audit_compress,
+                "siem_webhook": self.console.siem_webhook,
+                "siem_api_key": self.console.siem_api_key,
                 # mcp_http_path は raw にあれば保持
                 "mcp_http_path": self.console.mcp_http_path,
             }
@@ -280,6 +284,8 @@ def _console_from_raw(raw: dict[str, Any], agent_user: str, agent_pass: str) -> 
         oidc_token_endpoint=str(raw.get("oidc_token_endpoint", "")),
         session_lifetime_minutes=max(1, int(raw.get("session_lifetime_minutes", 480))),
         session_cookie_secure=bool(raw.get("session_cookie_secure", True)),
+        siem_webhook=str(raw.get("siem_webhook", "")),
+        siem_api_key=str(raw.get("siem_api_key", "")),
         require_approval=bool(raw.get("require_approval", True)),
         approval_ttl_minutes=int(raw.get("approval_ttl_minutes", 15)),
         mcp_audit=bool(raw.get("mcp_audit", True)),

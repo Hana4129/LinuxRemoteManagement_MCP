@@ -53,12 +53,16 @@ class McpAudit:
         max_size_mb: int = 10,
         max_backups: int = 5,
         compress: bool = True,
+        siem_webhook: str = "",
+        siem_api_key: str = "",
     ):
         self.path = Path(path)
         self.enabled = enabled
         self.max_size_mb = max_size_mb
         self.max_backups = max_backups
         self.compress = compress
+        self.siem_webhook = siem_webhook
+        self.siem_api_key = siem_api_key
         self._lock = threading.Lock()
         self._fh = None
         if self.enabled:
@@ -102,6 +106,24 @@ class McpAudit:
                 self._fh.flush()
         except OSError:
             pass
+        if self.siem_webhook:
+            self._siem_send(entry)
+
+    def _siem_send(self, entry: dict[str, Any]) -> None:
+        """ログエントリをSIEM webhookへ非同期で転送する (失敗してもログ本体に影響させない)。"""
+        import httpx  # 遅延 import (テスト/短時間プロセスで不要)
+
+        headers = {"Content-Type": "application/json"}
+        if self.siem_api_key:
+            headers["Authorization"] = f"Bearer {self.siem_api_key}"
+
+        def _post() -> None:
+            try:
+                httpx.post(self.siem_webhook, json=entry, headers=headers, timeout=5.0)
+            except Exception:  # noqa: BLE001
+                pass
+
+        threading.Thread(target=_post, daemon=True).start()
 
     def _rotate_if_needed(self) -> None:
         """ファイルサイズが上限を超えていたらローテーションする。"""

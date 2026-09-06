@@ -283,6 +283,8 @@ def _maybe_audit(config: AppConfig) -> McpAudit | None:
             max_size_mb=config.console.audit_max_size_mb,
             max_backups=config.console.audit_max_backups,
             compress=config.console.audit_compress,
+            siem_webhook=config.console.siem_webhook,
+            siem_api_key=config.console.siem_api_key,
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("McpAudit 初期化に失敗 (監査ログを無効化): %s", exc)

@@ -242,7 +242,26 @@ tail -f mcp-server/data/mcp_audit.log
 tail -f /var/log/linux-agent/audit.log
 ```
 
-### 3.4 Agent失効同期のpending解消
+### 3.5 SIEM への監査ログ転送
+
+`mcp_audit` が有効な場合、各監査ログエントリを外部 SIEM の webhook へ非同期で転送できる。
+
+```yaml
+# config.yml
+console:
+  mcp_audit: true
+  siem_webhook: https://siem.example/ingest
+  siem_api_key: <Bearer token>  # 省略可
+```
+
+- 転送は別スレッドで行われ、webhook への到達不良が監査ログファイルの書き込みを阻害しない
+- `siem_api_key` が設定されている場合、`Authorization: Bearer <key>` ヘッダーが付与される
+- 転送先が 4xx/5xx でもリトライは行わない (ログへの影響を避けるため)
+- 機密値 (`token`, `Authorization` 等) はマスクされた状態で送信される
+
+---
+
+## 4. Agent失効同期のpending解消
 
 Agent停止中にAgent credentialを失効した場合、MCP Server側は即座にローカル失効を完了させ (fail-closed)、同期状態が `pending` として記録される。Agent復旧後に以下の手順でAgentへ失効を再送する。
 
@@ -267,9 +286,9 @@ curl -u admin:password -X POST https://console.example/api/agent-credentials/{cr
 
 ---
 
-## 4. バックアップと復旧
+## 5. バックアップと復旧
 
-### 4.1 バックアップ対象
+### 5.1 バックアップ対象
 
 | ファイル | 説明 | 頻度 |
 |----------|------|------|
@@ -278,7 +297,7 @@ curl -u admin:password -X POST https://console.example/api/agent-credentials/{cr
 | `lrm-mcp-agent/config.yml` | Agent 設定 | 変更時 |
 | `lrm-mcp-agent/certs/` | TLS 証明書 | 更新時 |
 
-### 4.2 バックアップ手順
+### 5.2 バックアップ手順
 
 ```bash
 # トークンデータベースバックアップ
@@ -288,7 +307,7 @@ sqlite3 mcp-server/data/tokens.db ".backup tokens_backup_$(date +%Y%m%d).db"
 # config.yml はGit管理推奨
 ```
 
-### 4.3 復旧手順
+### 5.3 復旧手順
 
 ```bash
 # トークンデータベース復旧
@@ -300,9 +319,9 @@ systemctl restart linux-mcp-server
 
 ---
 
-## 5. セキュリティ運用
+## 6. セキュリティ運用
 
-### 5.1 定期タスク
+### 6.1 定期タスク
 
 | タスク | 頻度 | コマンド |
 |--------|------|----------|
@@ -311,7 +330,7 @@ systemctl restart linux-mcp-server
 | 監査ログ検証 | 毎日 | `lrm-mcp-agent -verify-audit` |
 | 証明書期限確認 | 每月 | `openssl x509 -in cert.pem -noout -dates` |
 
-### 5.2 レート制限設定
+### 6.2 レート制限設定
 
 ```yaml
 # config.yml (MCP Server)
@@ -323,7 +342,7 @@ console:
   audit_compress: true         # gzip圧縮
 ```
 
-### 5.3 監査ログローテーション
+### 6.3 監査ログローテーション
 
 ```yaml
 # config.yml (Agent)
@@ -339,9 +358,9 @@ agent:
 
 ---
 
-## 6. 監視
+## 7. 監視
 
-### 6.1 ヘルスチェック
+### 7.1 ヘルスチェック
 
 ```bash
 # MCP Server
@@ -351,14 +370,14 @@ curl http://localhost:8080/api/meta
 curl -k https://agent:8443/v1/health
 ```
 
-### 6.2 メトリクス (Agent)
+### 7.2 メトリクス (Agent)
 
 ```bash
 # Prometheus 形式メトリクス
 curl -k https://agent:8443/metrics
 ```
 
-### 6.3 ノード状況確認
+### 7.3 ノード状況確認
 
 ```bash
 # 全ノード状況
@@ -370,9 +389,9 @@ curl http://localhost:8080/api/nodes/dev-web-01
 
 ---
 
-## 7. トラブルシューティング
+## 8. トラブルシューティング
 
-### 7.1 よくある問題
+### 8.1 よくある問題
 
 **Q: トークンを紛失した場合**
 A: 管理コンソールから新しいトークンを発行し、古いトークンを失効させてください。
@@ -383,6 +402,6 @@ A: `audit_max_size_mb` を小さくするか、`audit_max_backups` を減らし�
 **Q: レート制限に引っかかる場合**
 A: `rate_limit_per_minute` と `rate_limit_burst` を増やすか、クライアント側でリクエスト頻度を下げてください。
 
-### 7.2 サポート
+### 8.2 サポート
 
 - GitHub Issues: https://github.com/Hana4219/Linux_Remote_Management_MCP/issues
