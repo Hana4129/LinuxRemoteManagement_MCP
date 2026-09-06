@@ -189,7 +189,7 @@ principal作成、権限付与/失効、principal無効化、MCP token発行、A
 
 ### 7. Agent credentialの発行・配布フロー
 
-**状態: 生成API・ローテーション (グラ期間つき) を実装済み。Secret Manager連携が残っている。**
+**状態: 生成API・ローテーション (グラ期間つき)・Secret Manager (環境変数参照) 連携まで実装済み。実Agent環境でのE2E確認が残っている。**
 
 **内容**
 
@@ -198,7 +198,7 @@ principal作成、権限付与/失効、principal無効化、MCP token発行、A
 - `GET /api/agent-credentials/{id}/rotations` でローテーション履歴を追跡 (rotated_by記録つき)
 - `POST /api/agent-credentials/cleanup-grace-periods` でグラ期間経過credentialを完全失効
 - token ID、scope、allowlistの対応はAgent設定 (`config.yml`) とcredentialレコード (`agent_token_id`) で管理
-- Secret Managerからの直接登録は未対応 (生値の一時表示は `/generate` で最小化済み)
+- Secret Manager連携: 登録時の `token` に `env:環境変数名` を指定すると、サーバーが環境変数から解決して登録する (生値をAPIリクエストへ載せない)。CI/CDでVault Agent等から環境変数へ注入する運用に対応
 
 **完了条件の状況**
 
@@ -206,7 +206,7 @@ principal作成、権限付与/失効、principal無効化、MCP token発行、A
 - credentialの発行、配布、ローテーション、失効を追跡できる → 実装済み (監査ログ + rotations履歴)
 - 古いcredentialのgrace期間と完全失効を確認できる → 実装・テスト済み
 
-残作業はSecret Manager (Vault等) 連携と、実Agent環境でのローテーションE2E確認である。
+残作業は実Agent環境でのローテーションE2E確認である。
 
 ### 8. 失効同期の障害時運用
 

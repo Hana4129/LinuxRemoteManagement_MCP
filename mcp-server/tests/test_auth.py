@@ -250,6 +250,52 @@ def test_agent_credentials_are_separate_and_revocable(tmp_path, store, monkeypat
     assert store.find_agent_credential("dev") is None
 
 
+def test_agent_credential_registered_from_env_var(tmp_path, store, monkeypatch):
+    """env:NAME 形式で環境変数からトークンを解決して登録できる (生値をリクエストに載せない)。"""
+    monkeypatch.setenv("LRM_TEST_AGENT_TOKEN", "secret-from-env")
+    app = create_app(_config(tmp_path, username="admin", password="secret"), store=store)
+    headers = _admin_headers()
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/agent-credentials",
+            json={"server_id": "dev", "name": "env-agent", "token": "env:LRM_TEST_AGENT_TOKEN", "agent_token_id": "agent-env"},
+            headers=headers,
+        )
+        assert response.status_code == 200
+        # レスポンスに生値は出ない
+        assert "token" not in response.json()["credential"]
+    found = store.find_agent_credential("dev")
+    assert found is not None and found.token_raw == "secret-from-env"
+
+
+def test_agent_credential_env_missing_is_rejected(tmp_path, store, monkeypatch):
+    """未設定の環境変数を参照すると400で拒否される。"""
+    monkeypatch.delenv("LRM_MISSING_TOKEN", raising=False)
+    app = create_app(_config(tmp_path, username="admin", password="secret"), store=store)
+    headers = _admin_headers()
+    with TestClient(app) as client:
+        res = client.post(
+            "/api/agent-credentials",
+            json={"server_id": "dev", "name": "env-agent", "token": "env:LRM_MISSING_TOKEN", "agent_token_id": "agent-env"},
+            headers=headers,
+        )
+        assert res.status_code == 400
+
+
+def test_agent_credential_env_empty_is_rejected(tmp_path, store, monkeypatch):
+    """空の環境変数を参照すると400で拒否される。"""
+    monkeypatch.setenv("LRM_EMPTY_TOKEN", "")
+    app = create_app(_config(tmp_path, username="admin", password="secret"), store=store)
+    headers = _admin_headers()
+    with TestClient(app) as client:
+        res = client.post(
+            "/api/agent-credentials",
+            json={"server_id": "dev", "name": "env-agent", "token": "env:LRM_EMPTY_TOKEN", "agent_token_id": "agent-env"},
+            headers=headers,
+        )
+        assert res.status_code == 400
+
+
 def test_agent_credential_generate_returns_raw_once(tmp_path, store):
     app = create_app(_config(tmp_path, username="admin", password="secret", admin_token="admin-secret"), store=store)
     headers = {"Authorization": "Basic " + base64.b64encode(b"admin:secret").decode("ascii")}

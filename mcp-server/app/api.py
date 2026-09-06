@@ -24,6 +24,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
@@ -45,6 +46,28 @@ def _require_admin(request: Request) -> None:
     principal = current_principal()
     if principal is not None and principal.get("role") != "admin":
         raise HTTPException(status_code=403, detail="管理者権限が必要です")
+
+
+ENV_TOKEN_PREFIX = "env:"
+
+
+def _resolve_agent_token(value: str) -> str:
+    """`env:NAME` 形式なら環境変数から解決する (Secret Manager連携の踏み台)。
+
+    CI/CD のシークレット注入 (Vaultエージェント等) で環境変数に格納した
+    トークンを、生値をAPIリクエストへ載せずに登録できる。
+    環境変数が未設定・空の場合は 400 を返す。
+    """
+    token = value.strip()
+    if not token.startswith(ENV_TOKEN_PREFIX):
+        return token
+    env_name = token[len(ENV_TOKEN_PREFIX):].strip()
+    if not env_name:
+        raise HTTPException(status_code=400, detail="env: の後に環境変数名を指定してください")
+    resolved = os.environ.get(env_name)
+    if not resolved:
+        raise HTTPException(status_code=400, detail=f"環境変数が未設定または空です: {env_name}")
+    return resolved
 
 
 def _approval_actor(request: Request, fallback: str) -> str:
@@ -332,8 +355,9 @@ def register_agent_credential(request: Request, payload: AgentCredentialCreateRe
     _require_admin(request)
     _server_or_404(request, payload.server_id)
     store: TokenStore = request.app.state.store
+    token = _resolve_agent_token(payload.token)
     credential = store.create_agent_credential(
-        payload.server_id, payload.name, payload.token, expires_in_days=payload.expires_in_days
+        payload.server_id, payload.name, token, expires_in_days=payload.expires_in_days
         , agent_token_id=payload.agent_token_id
     )
     _audit_management(request, "register_agent_credential", {"credential_id": credential.id, "server_id": payload.server_id, "agent_token_id": payload.agent_token_id})

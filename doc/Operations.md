@@ -154,6 +154,25 @@ Agentを再読み込みする。生値は一覧APIに再表示されないため
 (代替フロー) Agent側で生成済みのtokenを登録する場合は
 `POST /api/agent-credentials` を使用する。
 
+#### 環境変数からの参照登録 (Secret Manager連携)
+
+トークンの生値を管理APIリクエストへ直接載せず、環境変数名で参照して登録できる
+(`env:環境変数名` 形式)。CI/CDパイプラインで Vault Agent 等から環境変数へ
+シークレットを注入している環境で、生値をAPIのペイロード・ログへ露出させずに
+credential を登録できる。
+
+```bash
+# 例: LRM_AGENT_TOKEN_WEB01 環境変数に生トークンが設定済みの場合
+curl -X POST http://localhost:8080/api/agent-credentials \
+  -H "Content-Type: application/json" \
+  -d '{"server_id": "web01", "name": "web01-agent", "token": "env:LRM_AGENT_TOKEN_WEB01", "agent_token_id": "web01-primary"}'
+```
+
+- 環境変数が未設定・空の場合は `400` で拒否される
+- 解決後の値は従来どおり `data_dir/tokens.db` の `agent_credentials.token_raw` に保存される
+- レスポンス・ログ・一覧APIには生値は出力されない
+- 直接トークン値を指定した登録も引き続き利用可能
+
 #### ローテーション
 
 ```bash
