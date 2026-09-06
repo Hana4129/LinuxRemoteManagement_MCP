@@ -9,18 +9,19 @@ Linux Remote Management MCP の認証・認可分離に関する残作業をま�
 - principal、server、scope による基本的な権限チェック
 - principal の作成、権限付与、権限失効、無効化
 - OIDC JWT の署名、issuer、audience、期限、subject 検証
-- Agent 接続 credential の分離管理
+- OIDC ブラウザログイン (Authorization Code + PKCE) とセッションCookie + CSRF トークン強制
+- Agent 接続 credential の分離管理 (生成API / ローテーション / env参照登録 / 失効同期のfail-closedと再送)
 - Agent token の管理 endpoint による即時失効
-- Agent管理失効 endpoint のGoテストを追加（ローカル環境ではGo未実行）
-- 管理操作の admin role 制限
+- Agent 失効の永続化 (reload/再起動後の復活防止) と Go テスト・ビルド
+- 管理操作の admin role 制限 (ロールマトリクス)
 - 管理コンソールのAccessタブによるprincipal・権限・Agent credential管理
-- 承認APIで認証済みprincipalを承認者として記録
-- MCP承認要求で認証済みprincipalを要求者として記録
+- 承認APIで認証済みprincipalを承認者として記録、MCP承認要求で要求者を記録
 - 管理コンソールの同一origin CSRF検査
 - 管理コンソール静的アセットのバージョン付きキャッシュ制御
 - Basic認証アカウントをadmin principalとして扱う認証主体統一
 - 管理コンソールのMCP Bearerトークン認証 (principal紐付けトークンのRBAC強制・無効/未紐付けトークンの401拒否)
-- Python テスト 128 件
+- mTLS: Agent(Go) のクライアント証明書強制テスト、MCP Server(Go/Python) の client_cert/client_key 設定伝播
+- Python テスト 142 件 / Go テスト (go test ./...)・go vet・go build 成功
 
 ## 優先度 P0: 本番導入前に必要
 
@@ -43,37 +44,51 @@ Linux Remote Management MCP の認証・認可分離に関する残作業をま�
 
 ### 2. AgentとのmTLS構成確認
 
+**状態: 実装・テスト済み。実機での設定反映確認が残っている。**
+
 **内容**
 
-- MCP Server用クライアント証明書を発行する
+- MCP Server用クライアント証明書を発行する (設定手順は `doc/mTLS.md`)
 - Agent側 `client_ca_file` を設定する
 - MCP Server側 `client_cert` / `client_key` を設定する
 - Agentの管理 endpoint がPrivate NetworkまたはmTLS経由だけで到達可能であることを確認する
 
-**完了条件**
+**検証済み (自動テスト)**
 
-- 証明書なしのAgent管理 endpointアクセスが拒否される
-- 不正なクライアント証明書が拒否される
-- MCP Serverから通常操作と失効同期の両方が成功する
+- Go: `tls_test.go` で、クライアント証明書なし・不正CA証明書のハンドシェイク拒否、有効証明書での成功を実証
+- Go: `client_ca_file` 設定ロード、CA付き/無しで mTLS 有効化を確認
+- Python: `tests/test_mtls_client.py` で、`AgentClient` が `client_cert` / `client_key` を httpx の `cert` 引数へ正しく伝播させることを確認
+- Python: `tests/test_servers.py` で、`config.yml` の `client_cert` / `client_key` の保存・読込を確認
+
+**残作業 (実機環境)**
+
+- MCP Server から実Agentへの mTLS 接続 (通常操作と失効同期の両方)
+- Agentの管理 endpoint のPrivate Network到達制限
 
 ### 3. Agent側Goテストとビルド
 
+**状態: 完了。**
+
 **内容**
 
-- Go 1.22以上を用意する
+- Go 1.22以上を用意する (本セッションで全パッケージのテスト・vet・buildを実行)
 - Agentの管理失効 endpoint のテストを追加する
 - token失効後に通常APIが `401` になることを確認する
-- 設定reloadと管理失効が競合しても失効状態が壊れないことを確認する
+- 設定reloadと管理失効が競合しても失効状態が壊れないことを確認する (失効を永続化しreload/再起動後も復活しないことを保証)
 
-**完了条件**
+**完了条件への結果**
 
 ```text
-go test ./...
-go vet ./...
-go build ./cmd/lrm-mcp-agent
+go test ./...   # ok (internal/agent, audit, config, policy)
+go vet ./...    # 成功
+go build ./cmd/lrm-mcp-agent  # 成功
 ```
 
-が成功する。
+**追加で対応した事項**
+
+- `revocation.go`: 失効トークンIDを `dataDir/revocations.json` へ永続化し、reload/再起動後に再適用する (統合検証項目「Agent再起動後も失効済みtokenが復活しない」に対応)
+- `agent_test.go`: reload・再起動を跨ぐ失効永続化テスト、管理失効の即時無効化テスト
+- `tls_test.go`: mTLSハンドシェイク強制テスト (P0-2)
 
 ### 3.1 別LinuxサーバーでのAgent統合検証
 
@@ -283,13 +298,23 @@ principal作成、権限付与/失効、principal無効化、MCP token発行、A
 
 ## 実施順序
 
-1. 本番IdPとmTLSの接続確認
-2. Go Agentのビルド・テスト環境を整備
-3. 承認・監査をprincipal単位に変更
-4. 管理コンソールUIへprincipal管理を追加
-5. Agent credentialの発行・配布・再試行を整備
-6. systemd、firewall、VPN、リバースプロキシを構成
-7. 統合テストとセキュリティレビューを実施
+1. 本番IdPとmTLSの接続確認 → OIDC設定手順 (`doc/OIDC.md`)・実装は完了。**本番IdPでの実トークン確認が残る**。mTLSはGo+Pythonの自動テストで検証済み、**実機での設定反映が残る**
+2. Go Agentのビルド・テスト環境を整備 → **完了** (`go test ./...` / `go vet ./...` / `go build ./cmd/lrm-mcp-agent`)
+3. 承認・監査をprincipal単位に変更 → **実装済み** (承認者/要求者にprincipal記録、管理操作の監査)
+4. 管理コンソールUIへprincipal管理を追加 → **実装済み** (Accessタブ)
+5. Agent credentialの発行・配布・再試行を整備 → **実装済み** (生成/ローテーション/env参照/失効同期のfail-closedと再送)
+6. systemd、firewall、VPN、リバースプロキシを構成 → systemd unit・リバースプロキシ設定例は実装済み。**firewall/VPN/ACLの適用は実環境作業**
+7. 統合テストとセキュリティレビューを実施 → 単体・統合テストは拡充済み (Python 142件 / Go全パッケージ)。**3.1節の別LinuxサーバーでのAgent統合検証が残る**
+
+## 残タスク (全て実環境で必要な項目)
+
+- P0-1: 本番IdPの実トークンでOIDCログイン確認
+- P0-2: MCP Server→実AgentへのmTLS接続（通常操作と失効同期）
+- 3.1: 別LinuxサーバーでのAgent統合検証（token権限分離・失効・reload・監査ログ）
+- P1-4〜P1-6: 実ブラウザでのUI統合確認、OIDC実環境での承認統合、SIEM転送確認
+- P2-9〜P2-10: 導入環境でのsystemd確認、firewall/VPN/ACL適用
+- P2-11: 実IdPでのブラウザログイン確認、リバースプロキシTLS終端位置の確認
+- P2-12: mTLSの実環境接続テスト
 
 ## 注意事項
 
