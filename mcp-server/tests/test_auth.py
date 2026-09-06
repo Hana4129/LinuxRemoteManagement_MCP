@@ -230,6 +230,102 @@ def test_mcp_token_auth_sets_principal(tmp_path, store):
         assert response.status_code == 200
 
 
+def test_self_approval_is_rejected(tmp_path, store):
+    """要求者と同一 principal による自己承認は 400 で拒否される (4-eyes 原則)。"""
+    config = _config(tmp_path, username="admin", password="secret")
+    app = create_app(config, store=store)
+    admin_headers = _admin_headers()
+    with TestClient(app) as client:
+        principal = client.post(
+            "/api/principals",
+            json={"subject": "alice", "display_name": "Alice", "role": "operator"},
+            headers=admin_headers,
+        ).json()
+        token = client.post(
+            "/api/tokens",
+            json={
+                "name": "alice-token",
+                "principal_id": principal["id"],
+                "server_ids": ["dev"],
+                "scope": "operator",
+            },
+            headers=admin_headers,
+        ).json()
+        req = app.state.approvals.request(server_id="dev", service="nginx", requested_by="alice")
+        res = client.post(
+            f"/api/approvals/{req.id}/approve",
+            json={"ttl_minutes": 30},
+            headers={"Authorization": f"Bearer {token['token']}"},
+        )
+        assert res.status_code == 400
+
+
+def test_self_reject_is_rejected(tmp_path, store):
+    """要求者自身では却下できない。"""
+    config = _config(tmp_path, username="admin", password="secret")
+    app = create_app(config, store=store)
+    admin_headers = _admin_headers()
+    with TestClient(app) as client:
+        principal = client.post(
+            "/api/principals",
+            json={"subject": "alice", "display_name": "Alice", "role": "operator"},
+            headers=admin_headers,
+        ).json()
+        token = client.post(
+            "/api/tokens",
+            json={
+                "name": "alice-token",
+                "principal_id": principal["id"],
+                "server_ids": ["dev"],
+                "scope": "operator",
+            },
+            headers=admin_headers,
+        ).json()
+        req = app.state.approvals.request(server_id="dev", service="nginx", requested_by="alice")
+        res = client.post(
+            f"/api/approvals/{req.id}/reject",
+            json={},
+            headers={"Authorization": f"Bearer {token['token']}"},
+        )
+        assert res.status_code == 400
+
+
+def test_other_principal_can_approve(tmp_path, store):
+    """要求者と別 principal なら承認できる。"""
+    config = _config(tmp_path, username="admin", password="secret")
+    app = create_app(config, store=store)
+    admin_headers = _admin_headers()
+    with TestClient(app) as client:
+        client.post(
+            "/api/principals",
+            json={"subject": "alice", "display_name": "Alice", "role": "operator"},
+            headers=admin_headers,
+        ).json()
+        bob = client.post(
+            "/api/principals",
+            json={"subject": "bob", "display_name": "Bob", "role": "operator"},
+            headers=admin_headers,
+        ).json()
+        bob_token = client.post(
+            "/api/tokens",
+            json={
+                "name": "bob-token",
+                "principal_id": bob["id"],
+                "server_ids": ["dev"],
+                "scope": "operator",
+            },
+            headers=admin_headers,
+        ).json()
+        req = app.state.approvals.request(server_id="dev", service="nginx", requested_by="alice")
+        res = client.post(
+            f"/api/approvals/{req.id}/approve",
+            json={"ttl_minutes": 30},
+            headers={"Authorization": f"Bearer {bob_token['token']}"},
+        )
+        assert res.status_code == 200
+        assert res.json()["approver"] == "bob"
+
+
 def test_agent_credentials_are_separate_and_revocable(tmp_path, store, monkeypatch):
     app = create_app(_config(tmp_path, username="admin", password="secret", admin_token="admin-secret"), store=store)
     headers = {"Authorization": "Basic " + base64.b64encode(b"admin:secret").decode("ascii")}

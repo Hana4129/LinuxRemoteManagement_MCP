@@ -77,6 +77,16 @@ def _approval_actor(request: Request, fallback: str) -> str:
     return fallback
 
 
+def _reject_self_approval(rec: ApprovalRecord, approver: str) -> None:
+    """要求者と承認者が同一の場合は自己承認を禁止する (4-eyes 原則)。"""
+    requester = (rec.requested_by or "").strip()
+    if requester and approver and requester == approver:
+        raise HTTPException(
+            status_code=400,
+            detail="要求者と承認者が同一のため自己承認はできません",
+        )
+
+
 def _audit_actor() -> str:
     principal = current_principal()
     if principal is None:
@@ -801,7 +811,6 @@ def delete_server(request: Request, server_id: str) -> dict[str, Any]:
 
 from .approvals import (  # noqa: E402
     ApprovalError,
-    ApprovalNotFoundError,
     ApprovalRecord,
     ApprovalStore,
 )
@@ -843,13 +852,18 @@ def get_approval(request: Request, approval_id: str) -> dict[str, Any]:
 
 @approvals_router.post("/{approval_id}/approve")
 def approve(request: Request, approval_id: str, payload: ApproveRequest) -> dict[str, Any]:
-    """pending の承認要求を承認する (ttl_minutes 後に失効)。"""
+    """pending の承認要求を承認する (ttl_minutes 後に失効)。
+
+    要求者と同一 principal による自己承認は 4-eyes 原則のため禁止する。
+    """
     store = _store_or_503(request)
+    existing = store.get(approval_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail=f"承認が見つかりません: {approval_id}")
     approver = _approval_actor(request, "console")
+    _reject_self_approval(existing, approver)
     try:
         rec = store.approve(approval_id, approver=approver, ttl_minutes=payload.ttl_minutes)
-    except ApprovalNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ApprovalError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     log.info("承認 id=%s approver=%r ttl=%s分", approval_id, approver, payload.ttl_minutes)
@@ -862,13 +876,15 @@ def approve(request: Request, approval_id: str, payload: ApproveRequest) -> dict
 
 @approvals_router.post("/{approval_id}/reject")
 def reject(request: Request, approval_id: str, payload: RejectRequest) -> dict[str, Any]:
-    """pending の承認要求を却下する。"""
+    """pending の承認要求を却下する。要求者自身では却下できない。"""
     store = _store_or_503(request)
+    existing = store.get(approval_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail=f"承認が見つかりません: {approval_id}")
     approver = _approval_actor(request, "console")
+    _reject_self_approval(existing, approver)
     try:
         rec = store.reject(approval_id, approver=approver)
-    except ApprovalNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ApprovalError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     log.info("承認却下 id=%s approver=%r", approval_id, approver)
