@@ -1,4 +1,4 @@
-"""認証済みMCP主体をリクエスト単位で保持する。"""
+"""MCP主体のトークンをリクエスト単位で保持する (app/shared モジュール)。"""
 
 from __future__ import annotations
 
@@ -6,10 +6,9 @@ from contextvars import ContextVar
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .db import TokenRecord
+    from app.db import TokenRecord
 
 _current_token: ContextVar[TokenRecord | None] = ContextVar("current_mcp_token", default=None)
-_current_principal: ContextVar[dict | None] = ContextVar("current_console_principal", default=None)
 
 
 def set_current_token(token: TokenRecord):
@@ -22,18 +21,6 @@ def reset_current_token(token_context) -> None:
 
 def current_token() -> TokenRecord | None:
     return _current_token.get()
-
-
-def set_current_principal(principal: dict):
-    return _current_principal.set(principal)
-
-
-def reset_current_principal(context) -> None:
-    _current_principal.reset(context)
-
-
-def current_principal() -> dict | None:
-    return _current_principal.get()
 
 
 def authenticate_raw_token(store, raw: str):

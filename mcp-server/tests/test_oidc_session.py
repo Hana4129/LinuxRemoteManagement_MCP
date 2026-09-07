@@ -15,8 +15,8 @@ from fastapi.testclient import TestClient
 
 from app.config import AgentConfig, AppConfig, ConsoleConfig, ServerConfig, load_config
 from app.db import TokenStore
-from app.main import create_app
-from app.oidc_browser import _pkce_challenge
+from console.main import create_app
+from console.oidc_browser import _pkce_challenge
 
 ISSUER = "https://issuer.example"
 JWKS_URL = ISSUER + "/keys"

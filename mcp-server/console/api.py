@@ -32,12 +32,12 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from . import __version__
-from .agent_client import AgentClient, AgentResult
 from .auth import current_principal
-from .config import ServerConfig
-from .db import TokenStore
-from .status import collect_all_nodes, collect_node_status, summarize_nodes
-from .tokens import SCOPES, now_iso
+from app.agent_client import AgentClient, AgentResult
+from app.config import ServerConfig
+from app.db import TokenStore
+from app.status import collect_all_nodes, collect_node_status, summarize_nodes
+from app.tokens import SCOPES, now_iso
 
 log = logging.getLogger(__name__)
 
@@ -808,7 +808,7 @@ def delete_server(request: Request, server_id: str) -> dict[str, Any]:
 
 # ---- 承認 (Human Approval) 管理 API ----
 
-from .approvals import (  # noqa: E402
+from app.approvals import (  # noqa: E402
     ApprovalError,
     ApprovalRecord,
     ApprovalStore,

@@ -8,7 +8,7 @@ import yaml
 from fastapi.testclient import TestClient
 
 from app.config import AgentConfig, AppConfig, ConsoleConfig, ServerConfig, load_config
-from app.main import create_app
+from console.main import create_app
 
 
 @pytest.fixture()

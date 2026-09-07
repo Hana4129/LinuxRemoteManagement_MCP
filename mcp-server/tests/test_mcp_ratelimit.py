@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import AgentConfig, AppConfig, ConsoleConfig, ServerConfig
-from app.main import create_app
+from console.main import create_app
 from app.db import TokenStore
 from app.mcp_ratelimit import RateLimiter
 

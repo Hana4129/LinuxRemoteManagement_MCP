@@ -16,10 +16,10 @@ from fastapi.testclient import TestClient
 from jwt.algorithms import RSAAlgorithm
 
 from app.agent_client import AgentClient
-from app.auth import reset_current_token, set_current_token
+from console.auth import reset_current_token, set_current_token
 from app.config import AgentConfig, AppConfig, ConsoleConfig, ServerConfig
 from app.db import TokenStore
-from app.main import create_app
+from console.main import create_app
 
 # ---------------------------------------------------------------------------
 # ヘルパー
@@ -381,7 +381,7 @@ def _oidc_app(tmp_path, store, jwks: dict, monkeypatch):
         def json(self) -> dict:
             return jwks
 
-    monkeypatch.setattr("app.oidc.httpx.get", lambda url, timeout: _FakeJwksResponse())
+    monkeypatch.setattr("console.oidc.httpx.get", lambda url, timeout: _FakeJwksResponse())
     config = AppConfig(
         config_path=tmp_path / "config.yml",
         servers=(),

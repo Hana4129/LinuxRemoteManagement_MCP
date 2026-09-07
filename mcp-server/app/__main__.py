@@ -11,8 +11,8 @@ import logging
 
 import uvicorn
 
-from .config import load_config
-from .main import create_app
+from app.config import load_config
+from console.main import create_app
 
 
 def main() -> None:

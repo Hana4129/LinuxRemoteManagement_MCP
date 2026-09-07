@@ -24,11 +24,6 @@ from .api import (
     tokens_router,
 )
 from .auth import authenticate_raw_token, current_principal, reset_current_principal, set_current_principal
-from .approvals import ApprovalStore
-from .config import AppConfig, load_config
-from .db import TokenStore
-from .mcp_audit import McpAudit
-from .mcp_ratelimit import install_rate_limit
 from .oidc import OidcError, OidcValidator
 from .oidc_browser import (
     CSRF_COOKIE,
@@ -39,10 +34,15 @@ from .oidc_browser import (
     exchange_code,
     _pkce_challenge,
 )
+from app.approvals import ApprovalStore
+from app.config import AppConfig, load_config
+from app.db import TokenStore
+from app.mcp_audit import McpAudit
+from app.mcp_ratelimit import install_rate_limit
 
 logger = logging.getLogger("linux_mcp")
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR = Path(__file__).resolve().parent
 
 
 def _maybe_basic_auth(app: FastAPI, config: AppConfig) -> None:

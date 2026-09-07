@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import AgentConfig, AppConfig, ConsoleConfig, McpConfig, ServerConfig
-from app.main import create_app
+from console.main import create_app
 from app.mcp_http import create_mcp_http_app
 
 
@@ -517,7 +517,7 @@ def test_oidc_subject_must_be_provisioned(tmp_path, store, monkeypatch):
         def validate(self, raw_token):
             return {"sub": raw_token}
 
-    monkeypatch.setattr("app.main.OidcValidator", FakeValidator)
+    monkeypatch.setattr("console.main.OidcValidator", FakeValidator)
     app = create_app(config, store=store)
     with TestClient(app) as client:
         assert client.get("/api/meta", headers={"Authorization": "Bearer unknown"}).status_code == 403
@@ -633,7 +633,7 @@ def test_oidc_known_subject_allowed(tmp_path, store, monkeypatch):
         def validate(self, raw_token):
             return {"sub": raw_token}
 
-    monkeypatch.setattr("app.main.OidcValidator", FakeValidator)
+    monkeypatch.setattr("console.main.OidcValidator", FakeValidator)
     store.create_principal("known-sub", "Known User", "viewer")
     app = create_app(config, store=store)
     with TestClient(app) as client:

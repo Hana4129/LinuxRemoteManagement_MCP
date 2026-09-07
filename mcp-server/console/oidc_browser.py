@@ -21,7 +21,7 @@ from urllib.parse import urlencode
 
 import httpx
 
-from .tokens import is_expired
+from app.tokens import is_expired
 
 SESSION_COOKIE = "lrm_session"
 CSRF_COOKIE = "lrm_csrf"
