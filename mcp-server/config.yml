@@ -4,6 +4,14 @@
 #   console: 管理コンソール(社内Webページ)の設定
 #   agent  : 各ノードのLinux Agentと通信する際の共通設定
 # ルートは mcp-server/ に置いて `python -m app` から起動する前提。
+#
+# 機密値 (password, API Key, Token等) のベストプラクティス:
+#   ${ENV_VAR}        参照 : 環境変数から解決 (未設定時は起動失敗 / fail-closed)
+#   ${ENV_VAR:-default} : 環境変数から解決 (未設定時は default 値)
+#   これにより config.yml 自体に秘密を平文で書かずに済む。実運では
+#   systemd の /etc/linux-mcp-server/env (chmod 600) または
+#   Secret Manager / Vault の注入で環境変数を提供する。
+#   (doc/Operations.md §6.5, scripts/env.example 参照)
 # =====================================================================
 
 console:
@@ -12,9 +20,14 @@ console:
   data_dir: ./data         # tokens.db (SQLite) 保存先
   auth_required: true      # 本番では管理コンソールの認証を必須にする
   auth_mode: basic         # basic または oidc
-  # username/password または環境変数 LINUX_MCP_CONSOLE_USER / _PASS を必ず設定する。
+  # username/password : 環境変数 LINUX_MCP_CONSOLE_USER / _PASS で設定 (fallback あり)
+  # 本番では ${ENV_VAR} 参照を推奨:  password: ${LINUX_MCP_CONSOLE_PASS}
   # username: admin
-  # password: change-me
+  # password: ${LINUX_MCP_CONSOLE_PASS}
+  # SIEM webhook (HTTPS推奨) : 監査ログを外部SIEMへ転送 (空欄で無効)
+  # siem_webhook: ${MCP_SIEM_WEBHOOK:-}
+  # SIEM API Key : webhook 転送時の認証ヘッダー用 (空欄で無効)
+  # siem_api_key: ${MCP_SIEM_API_KEY:-}
 
 mcp:
   host: 127.0.0.1          # MCP利用者から到達可能な社内/VPNネットワークに限定する
@@ -28,10 +41,10 @@ agent:
   tls_verify: false        # 自己署名証明書の開発環境では false にする
   user_agent: linux-mcp-server/0.1
   # Agent側の admin_token_hash と対応する秘密。管理endpointの失効同期専用。
-  # admin_token: change-this-sync-secret
-  # mTLS: Agent 側でクライアント証明書検証を有効にする場合に設定する
-  # client_cert: ./data/client.crt
-  # client_key: ./data/client.key
+  # admin_token: ${LINUX_MCP_AGENT_ADMIN_TOKEN}
+  # mTLS: Agent 側でクライアント証証書検証を有効にする場合に設定する
+  # client_cert: ${MCP_AGENT_CLIENT_CERT:-}
+  # client_key: ${MCP_AGENT_CLIENT_KEY:-}
 
 # ---- 管理対象ノード ----
 servers:

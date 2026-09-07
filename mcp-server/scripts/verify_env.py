@@ -248,6 +248,16 @@ def check_systemd_units(config: Any, report: Report) -> None:
         return
     detail = f"{len(units)} unit定義あり"
     status = PASS
+    # Check for security hardening options in unit files
+    hardening_flags = ["NoNewPrivileges", "ProtectSystem", "ProtectHome", "PrivateTmp"]
+    advanced_flags = ["MemoryDenyWriteExecute", "RestrictAddressFamilies", "SystemCallArchitectures"]
+    hardening_detail = []
+    for unit in units:
+        content = unit.read_text(encoding="utf-8")
+        basic = [f for f in hardening_flags if f in content]
+        advanced = [f for f in advanced_flags if f in content]
+        hardening_detail.append(f"{unit.name}:{len(basic)}+{len(advanced)}")
+    detail += f" (hardening: {', '.join(hardening_detail)})"
     if sys.platform == "linux" and shutil.which("systemctl"):
         for unit in units:
             name = unit.name
@@ -262,6 +272,49 @@ def check_systemd_units(config: Any, report: Report) -> None:
         report.add("P2-9", "systemd unit定義", status, detail, "" if status == PASS else "導入環境での install/enable/status 確認 (doc §P2-9)")
     else:
         report.add("P2-9", "systemd unit定義", PASS, detail + " (実機systemctl確認はLinux環境で実施)")
+
+
+def check_operational_scripts(config: Any, report: Report) -> None:
+    """Check for operational scripts (firewall, backup, monitor, logrotate)."""
+    scripts_dir = MCP_ROOT / "scripts"
+    agent_scripts_dir = REPO_ROOT / "lrm-mcp-agent" / "scripts"
+
+    # Firewall scripts
+    fw_server = scripts_dir / "firewall-setup.sh"
+    fw_agent = agent_scripts_dir / "firewall-setup.sh"
+    if fw_server.exists() and fw_agent.exists():
+        report.add("P2-10", "firewall 設定スクリプト", PASS, "Server/Agent 両方あり")
+    elif fw_server.exists() or fw_agent.exists():
+        report.add("P2-10", "firewall 設定スクリプト", WARN, "Server または Agent のみ")
+    else:
+        report.add("P2-10", "firewall 設定スクリプト", WARN, "未作成")
+
+    # Backup scripts
+    bk_server = scripts_dir / "backup.sh"
+    bk_agent = agent_scripts_dir / "backup.sh"
+    if bk_server.exists() and bk_agent.exists():
+        report.add("運用", "backup スクリプト", PASS, "Server/Agent 両方あり")
+    elif bk_server.exists() or bk_agent.exists():
+        report.add("運用", "backup スクリプト", WARN, "Server または Agent のみ")
+    else:
+        report.add("運用", "backup スクリプト", WARN, "未作成")
+
+    # Monitor scripts
+    mon_server = scripts_dir / "monitor.sh"
+    if mon_server.exists():
+        report.add("運用", "monitor スクリプト", PASS, "あり")
+    else:
+        report.add("運用", "monitor スクリプト", WARN, "未作成")
+
+    # Logrotate configs
+    lr_server = scripts_dir / "logrotate.conf"
+    lr_agent = agent_scripts_dir / "logrotate.conf"
+    if lr_server.exists() and lr_agent.exists():
+        report.add("運用", "logrotate 設定", PASS, "Server/Agent 両方あり")
+    elif lr_server.exists() or lr_agent.exists():
+        report.add("運用", "logrotate 設定", WARN, "Server または Agent のみ")
+    else:
+        report.add("運用", "logrotate 設定", WARN, "未作成")
 
 
 
@@ -396,6 +449,7 @@ def main() -> int:
         check_siem_config(config, report)
         check_pending_sync(config, report)
     check_systemd_units(config, report)
+    check_operational_scripts(config, report)
 
     # 実環境でしか確認できない項目は明示的に SKIP として出力 (ドキュメントの索引も兼ねる)
     _manual_check(report, "P0-1", "実IdPトークンでのOIDCログイン", "P0-1")

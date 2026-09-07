@@ -163,8 +163,12 @@ class AppConfig:
         """
         data: dict[str, Any] = dict(self.raw)
 
+        # 機密フィールドの ${ENV_VAR} 参照を save() 時に平文へ解決しないようにするための元データ。
+        original_console = data.get("console") or {}
+        original_agent = data.get("agent") or {}
+
         # console / agent の現行値をマージ (raw に存在しない項目だけ保証)。
-        console_raw = dict(data.get("console") or {})
+        console_raw = dict(original_console)
         console_raw.update(
             {
                 "host": self.console.host,
@@ -185,7 +189,7 @@ class AppConfig:
                 "audit_max_backups": self.console.audit_max_backups,
                 "audit_compress": self.console.audit_compress,
                 "siem_webhook": self.console.siem_webhook,
-                "siem_api_key": self.console.siem_api_key,
+                # siem_api_key は _preserve_env_ref で後から設定 (env ref 保持)
                 # mcp_http_path は raw にあれば保持
                 "mcp_http_path": self.console.mcp_http_path,
             }
@@ -194,7 +198,8 @@ class AppConfig:
         if self.console.username:
             console_raw["username"] = self.console.username
         if self.console.password:
-            console_raw["password"] = self.console.password
+            console_raw["password"] = _preserve_env_ref(original_console, "password", self.console.password)
+        console_raw["siem_api_key"] = _preserve_env_ref(original_console, "siem_api_key", self.console.siem_api_key)
         console_raw["auth_required"] = self.console.auth_required
         console_raw["auth_mode"] = self.console.auth_mode
         console_raw["oidc_issuer"] = self.console.oidc_issuer
@@ -205,7 +210,7 @@ class AppConfig:
             console_raw["oidc_client_id"] = self.console.oidc_client_id
             console_raw["oidc_redirect_uri"] = self.console.oidc_redirect_uri
             if self.console.oidc_client_secret:
-                console_raw["oidc_client_secret"] = self.console.oidc_client_secret
+                console_raw["oidc_client_secret"] = _preserve_env_ref(original_console, "oidc_client_secret", self.console.oidc_client_secret)
             if self.console.oidc_authorization_endpoint:
                 console_raw["oidc_authorization_endpoint"] = self.console.oidc_authorization_endpoint
             if self.console.oidc_token_endpoint:
@@ -213,7 +218,7 @@ class AppConfig:
             console_raw["session_lifetime_minutes"] = self.console.session_lifetime_minutes
             console_raw["session_cookie_secure"] = self.console.session_cookie_secure
 
-        agent_raw = dict(data.get("agent") or {})
+        agent_raw = dict(original_agent)
         agent_raw.update(
             {
                 "timeout_seconds": self.agent.timeout_seconds,
@@ -221,13 +226,13 @@ class AppConfig:
                 "user_agent": self.agent.user_agent,
             }
         )
-        # mTLS などの拡張キーは raw にあれば保持
+        # mTLS などの拡張キーは raw にあれば保持 (機密性あり: env ref を優先)
         if self.agent.client_cert:
-            agent_raw["client_cert"] = self.agent.client_cert
+            agent_raw["client_cert"] = _preserve_env_ref(original_agent, "client_cert", self.agent.client_cert)
         if self.agent.client_key:
-            agent_raw["client_key"] = self.agent.client_key
+            agent_raw["client_key"] = _preserve_env_ref(original_agent, "client_key", self.agent.client_key)
         if self.agent.admin_token:
-            agent_raw["admin_token"] = self.agent.admin_token
+            agent_raw["admin_token"] = _preserve_env_ref(original_agent, "admin_token", self.agent.admin_token)
 
         data["console"] = console_raw
         data["agent"] = agent_raw

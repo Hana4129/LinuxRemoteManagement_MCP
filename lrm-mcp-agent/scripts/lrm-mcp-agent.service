@@ -1,6 +1,7 @@
 [Unit]
 Description=Linux Remote Management Agent
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
@@ -17,6 +18,9 @@ ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/var/lib/lrm-mcp-agent /var/log/lrm-mcp-agent
 PrivateTmp=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
 
 [Install]
 WantedBy=multi-user.target
