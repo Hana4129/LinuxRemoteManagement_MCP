@@ -28,7 +28,7 @@ from .approvals import ApprovalStore
 from .config import AppConfig, load_config
 from .db import TokenStore
 from .mcp_audit import McpAudit
-from .mcp_ratelimit import RateLimiter
+from .mcp_ratelimit import install_rate_limit
 from .oidc import OidcError, OidcValidator
 from .oidc_browser import (
     CSRF_COOKIE,
@@ -292,24 +292,17 @@ def _maybe_audit(config: AppConfig) -> McpAudit | None:
 
 
 def _maybe_rate_limit(app: FastAPI, config: AppConfig) -> None:
-    """Add rate limiting middleware if enabled."""
+    """Add rate limiting middleware if enabled (IP + token composite, read/write separated)."""
 
-    per_minute = config.console.rate_limit_per_minute
-    burst = config.console.rate_limit_burst
-    if per_minute <= 0 or burst <= 0:
-        return
-    limiter = RateLimiter(per_minute=per_minute, burst=burst)
-
-    @app.middleware("http")
-    async def _rate_limit(request: Request, call_next):
-        client_ip = request.client.host if request.client else "unknown"
-        if not limiter.allow(client_ip):
-            return Response(
-                status_code=429,
-                content="429 Too Many Requests",
-                headers={"Retry-After": "60"},
-            )
-        return await call_next(request)
+    install_rate_limit(
+        app,
+        per_minute=config.console.rate_limit_per_minute,
+        burst=config.console.rate_limit_burst,
+        write_per_minute=config.console.rate_limit_write_per_minute,
+        write_burst=config.console.rate_limit_write_burst,
+        token_per_minute=config.console.rate_limit_token_per_minute,
+        token_burst=config.console.rate_limit_token_burst,
+    )
 
 
 def create_app(config: AppConfig | None = None, store: TokenStore | None = None) -> FastAPI:

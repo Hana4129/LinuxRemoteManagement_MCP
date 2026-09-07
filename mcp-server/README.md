@@ -85,7 +85,7 @@ python -m app.mcp_http_entry
 - **登録**: `POST /api/tokens/import` — 外部で発行済みトークンを登録
 - **失効**: `POST /api/tokens/{id}/revoke` — 即座に Agent 認証無効化
 - **削除**: `DELETE /api/tokens/{id}`
-- トークンは `data/tokens.db` (SQLite) に **SHA256 ハッシュ + 生値** (0600) で保存
+- トークンは `data/tokens.db` (SQLite) に **SHA256 ハッシュ + 暗号化した生値** (0600) で保存。生値は AES-256-GCM で暗号化され、鍵は DB 外 (`LRM_TOKEN_ENCRYPTION_KEY` 環境変数 or `token_encryption.key`) で管理
 
 ### 利用者・Agent credential管理
 - `POST /api/principals` — 利用者principalを作成
@@ -159,6 +159,13 @@ console:
   # oidc_issuer: https://idp.example.internal/realms/company
   # oidc_audience: linux-remote-management
   # oidc_jwks_url: https://idp.example.internal/realms/company/protocol/openid-connect/certs
+  # レート制限 (IP+トークン複合・操作別)。0 なら基本値へフォールバック
+  rate_limit_per_minute: 60
+  rate_limit_burst: 10
+  # rate_limit_write_per_minute: 20   # 操作系 (POST/PUT/PATCH/DELETE) の別バケット
+  # rate_limit_write_burst: 5
+  # rate_limit_token_per_minute: 120  # Bearer トークン単位の分離バケット
+  # rate_limit_token_burst: 30
 
 mcp:
   host: 127.0.0.1
@@ -180,8 +187,53 @@ servers:
 
 ## セキュリティ
 
-- トークンは CSPRNG (64バイト) で生成、SHA256 ハッシュで保存
+- トークンは CSPRNG (64バイト) で生成、SHA256 ハッシュで照合
+- 生トークンは DB に平文保存しない (AES-256-GCM で保存時暗号化、鍵は DB 外で管理)
 - `data/tokens.db` はファイルパーミッション 0600
 - Agent への通信は **Bearer Token** 認証 (constant-time 比較)
 - 本番では Secret Store (Vault 等) との連携への置き換えを推奨
+  (`LRM_TOKEN_ENCRYPTION_KEY` を KMS/Vault から注入することで鍵管理を外部化できる)
 - 社内ネットワークでのみアクセス可能なホスト (127.0.0.1) で listen
+
+### レート制限 (IP + トークン複合・操作別)
+
+コンソールと MCP HTTP の両方にトークンバケット方式のレート制限が適用される
+(`app/mcp_ratelimit.py` の `install_rate_limit`)。
+
+- **基本バケット**: IP、もしくは `IP+Bearerトークンハッシュ` の複合キーで計上
+  (同一 NAT 配下でも別トークンは独立にカウントされる)
+- **操作系バケット**: `POST/PUT/PATCH/DELETE` は独立した上限 (`rate_limit_write_*`) で制限
+- **トークンバケット**: Bearer トークン単位の上限 (`rate_limit_token_*`) で制限
+- キーには生トークンではなく **SHA-256 ハッシュ** のみを使う
+- 超過時は `429 Too Many Requests` + `Retry-After: 60`
+
+```yaml
+console:
+  rate_limit_per_minute: 60
+  rate_limit_burst: 10
+  rate_limit_write_per_minute: 20   # 操作系の分離 (0=基本値へフォールバック)
+  rate_limit_write_burst: 5
+  rate_limit_token_per_minute: 120  # トークン単位の分離 (0=基本値へフォールバック)
+  rate_limit_token_burst: 30
+```
+
+### 監査ログのハッシュチェーン (Immutable Audit Log)
+
+`data/mcp_audit.jsonl` の各エントリは SHA-256 の **ハッシュチェーン** で連結されている。
+`prev_hash` が1つ前のエントリのハッシュを指し、末尾のハッシュは次エントリの入力に含まれる。
+1エントリでも改ざんすると以降のチェーン全体が破綻するため、改ざんを検知できる
+(Agent 側 `lrm-mcp-agent/internal/audit/logger.go` と同じ方式)。
+
+検証コマンド:
+
+```bash
+python -m app.verify_audit_log data/mcp_audit.jsonl
+# すべて正常: OK
+# 改ざん/破綻あり: FAIL + 問題行の一覧、終了コード 1
+```
+
+- 旧形式 (hash フィールドなし) のエントリは検証対象外としてスキップする
+- ローテーションで前のファイルを参照する先頭エントリの `prev_hash` は許容する
+
+本番では監査ログを **append-only** で保持することを推奨する
+(例: `sudo mount -o remount,ro /var/lib/linux-mcp` や、`chattr +a` による追記専用化)。

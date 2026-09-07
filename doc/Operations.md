@@ -169,7 +169,7 @@ curl -X POST http://localhost:8080/api/agent-credentials \
 ```
 
 - 環境変数が未設定・空の場合は `400` で拒否される
-- 解決後の値は従来どおり `data_dir/tokens.db` の `agent_credentials.token_raw` に保存される
+- 解決後の値は `data_dir/tokens.db` の `agent_credentials.token_raw` に AES-256-GCM で暗号化して保存される (鍵は環境変数 `LRM_TOKEN_ENCRYPTION_KEY` または `data_dir/token_encryption.key`)
 - レスポンス・ログ・一覧APIには生値は出力されない
 - 直接トークン値を指定した登録も引き続き利用可能
 
@@ -327,7 +327,8 @@ systemctl restart linux-mcp-server
 |--------|------|----------|
 | トークンローテーション | 四半期 | `POST /api/tokens/{id}/rotate` |
 | 失効トークン清理 | 毎日 | `POST /api/tokens/cleanup-grace-periods` |
-| 監査ログ検証 | 毎日 | `lrm-mcp-agent -verify-audit` |
+| Agentの監査ログ検証 | 毎日 | `lrm-mcp-agent -verify-audit` |
+| MCP Serverの監査ログ検証 | 毎日 | `python -m app.verify_audit_log mcp-server/data/mcp_audit.log` |
 | 証明書期限確認 | 每月 | `openssl x509 -in cert.pem -noout -dates` |
 
 ### 6.2 レート制限設定
@@ -335,12 +336,22 @@ systemctl restart linux-mcp-server
 ```yaml
 # config.yml (MCP Server)
 console:
-  rate_limit_per_minute: 60    # 1クライアントあたりのリクエスト数
-  rate_limit_burst: 10         # バースト許容量
+  rate_limit_per_minute: 60    # 基本: 1クライアント (IP もしくは IP+トークン) あたりのリクエスト数
+  rate_limit_burst: 10         # 基本: バースト許容量
+  # --- レート制限の高度化 (0 の場合は基本値へフォールバック) ---
+  rate_limit_write_per_minute: 20   # 操作系 (POST/PUT/PATCH/DELETE) の分離バケット
+  rate_limit_write_burst: 5          # 操作系のバースト許容量
+  rate_limit_token_per_minute: 120   # Bearer トークン単位の分離バケット
+  rate_limit_token_burst: 30         # トークン単位のバースト許容量
   audit_max_size_mb: 10        # 監査ログ最大サイズ
   audit_max_backups: 5         # 監査ログ世代数
   audit_compress: true         # gzip圧縮
 ```
+
+レート制限は **IP+トークン複合キー** で計上されるため、同一 NAT 配下の複数クライアントを
+トークン単位で分離できる (Bearer トークンは SHA-256 ハッシュに変換してキー化され、
+生値はメモリ上にも残らない)。操作系は読み取りと独立したバケットで制限される。
+超過すると `429 Too Many Requests` (Retry-After: 60) が返る。
 
 ### 6.3 監査ログローテーション
 
@@ -354,6 +365,32 @@ agent:
       max_size_mb: 10      # 10MBでローテーション
       max_backups: 5       # 5世代保持
       compress: true       # gzip圧縮
+```
+
+### 6.4 MCP Server 監査ログのハッシュチェーン検証
+
+MCP Server の監査ログ (`mcp-server/data/mcp_audit.log`) はエントリごとに
+SHA-256 ハッシュチェーン (`prev_hash` / `hash`) を持ち、改ざんを検知できる。
+
+```bash
+# 検証 (正常: OK / 異常: FAIL + 問題行、終了コード 1)
+cd mcp-server
+python -m app.verify_audit_log data/mcp_audit.log
+
+# 複数ファイルも指定可能
+python -m app.verify_audit_log data/mcp_audit.log data/mcp_audit.log.1.gz
+```
+
+- 旧形式 (hash なし) エントリはスキップされ、ローテーション前ファイルへの
+  参照 (先頭エントリの非空 `prev_hash`) は許容される
+- 検証結果は監査ログ検証タスクとして日次で実行し、改ざんが疑われる場合は
+  該当ファイルとキー整合性を調査する
+
+append-only 保持の推奨:
+
+```bash
+# 監査ログディレクトリを読み取り専用マウント、または chattr +a で追記専用化
+sudo chattr +a /opt/linux-remote-management-mcp/mcp-server/data/mcp_audit.log
 ```
 
 ---

@@ -5,9 +5,12 @@
   - token_id / created_at / expires_at / scope / server_id を紐付けて管理
   - ログや一覧表示には生値を露出させない
 
-注意 (MVP): MCP Server が各ノードの Agent に対し Bearer 認証するには発行した生値が
-必要なため、`data/tokens.db` (SQLite) に生値を保持する。ファイルは 0600 に限定し
-Git にコミットしないこと。本番運用では Secret Store (Vault 等) 連携への置換を前提とする。
+保存について (Issue: 生トークン保存問題の解決):
+  - 照合用の SHA-256 ハッシュ (``token_hash``) を常に保存する
+  - MCP Server が Agent へ Bearer 認証するために必要な生値は、
+    ``db.py`` が AES-256-GCM で暗号化してから SQLite に保存する (secretbox.py 参照)
+  - 暗号化キーは DB 外 (環境変数 LRM_TOKEN_ENCRYPTION_KEY または
+    data_dir/token_encryption.key) で管理し、DB ファイル単体の漏洩では復元できない
 """
 
 from __future__ import annotations

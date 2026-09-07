@@ -11,11 +11,15 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+# ${ENV_VAR} または ${ENV_VAR:-default} 形式の環境変数参照を検出する
+_ENV_REF_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-[^}]*)?\}")
 
 
 @dataclass(frozen=True)
@@ -79,6 +83,11 @@ class ConsoleConfig:
     max_parallel_nodes: int = 5
     rate_limit_per_minute: int = 60
     rate_limit_burst: int = 10
+    # レート制限の高度化: 0 の場合は rate_limit_per_minute/burst へフォールバック
+    rate_limit_write_per_minute: int = 0
+    rate_limit_write_burst: int = 0
+    rate_limit_token_per_minute: int = 0
+    rate_limit_token_burst: int = 0
     audit_max_size_mb: int = 10
     audit_max_backups: int = 5
     audit_compress: bool = True
@@ -168,6 +177,10 @@ class AppConfig:
                 "max_parallel_nodes": self.console.max_parallel_nodes,
                 "rate_limit_per_minute": self.console.rate_limit_per_minute,
                 "rate_limit_burst": self.console.rate_limit_burst,
+                "rate_limit_write_per_minute": self.console.rate_limit_write_per_minute,
+                "rate_limit_write_burst": self.console.rate_limit_write_burst,
+                "rate_limit_token_per_minute": self.console.rate_limit_token_per_minute,
+                "rate_limit_token_burst": self.console.rate_limit_token_burst,
                 "audit_max_size_mb": self.console.audit_max_size_mb,
                 "audit_max_backups": self.console.audit_max_backups,
                 "audit_compress": self.console.audit_compress,
@@ -235,6 +248,54 @@ class AppConfig:
             yaml.dump(data, f, default_flow_style=False, allow_unicode=True)
 
 
+def _resolve_env_ref(match: re.Match[str]) -> str:
+    """${ENV_VAR} または ${ENV_VAR:-default} を環境変数値へ置換する。
+
+    変数未設定かつデフォルト無しは ValueError (fail-closed)。
+    """
+    name = match.group(1)
+    static_part = match.group(0)[len("${" + name):]
+    default = ""
+    if static_part.startswith(":-"):
+        default = static_part[2:-1]
+    if name in os.environ:
+        return os.environ[name]
+    if ":-" in static_part:
+        return default
+    raise ValueError(
+        f"config.yml で参照された環境変数 {name} が未設定です "
+        f"(${{{name}}} または ${name}:-<default> を環境変数で提供してください)"
+    )
+
+
+def _expand_env(value: Any) -> Any:
+    """config.yml の文字列値を再帰的に環境変数参照へ展開する。
+
+    例:
+      password: ${MCP_CONSOLE_PASSWORD}
+      siem_api_key: ${MCP_SIEM_API_KEY:-}
+    を環境変数の値へ置換する。未定義かつデフォルト無しはエラー。
+    """
+    if isinstance(value, str):
+        if "${" not in value:
+            return value
+        return _ENV_REF_PATTERN.sub(_resolve_env_ref, value)
+    if isinstance(value, dict):
+        return {k: _expand_env(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_expand_env(v) for v in value]
+    return value
+
+
+def _preserve_env_ref(source: dict[str, Any] | None, key: str, resolved: Any) -> Any:
+    """save() 時に環境変数参照 (${...}) を平文へ解決した値で上書きしないためのヘルパー。"""
+    if isinstance(source, dict):
+        raw_value = source.get(key)
+        if isinstance(raw_value, str) and "${" in raw_value:
+            return raw_value
+    return resolved
+
+
 def _find_config(explicit: str | Path | None) -> Path:
     """config.yml のパスを解決する。引数 > 環境変数 > カレント > パッケージ同梱。"""
     if explicit is not None:
@@ -292,6 +353,10 @@ def _console_from_raw(raw: dict[str, Any], agent_user: str, agent_pass: str) -> 
         max_parallel_nodes=max(1, int(raw.get("max_parallel_nodes", 5))),
         rate_limit_per_minute=max(0, int(raw.get("rate_limit_per_minute", 60))),
         rate_limit_burst=max(0, int(raw.get("rate_limit_burst", 10))),
+        rate_limit_write_per_minute=max(0, int(raw.get("rate_limit_write_per_minute", 0))),
+        rate_limit_write_burst=max(0, int(raw.get("rate_limit_write_burst", 0))),
+        rate_limit_token_per_minute=max(0, int(raw.get("rate_limit_token_per_minute", 0))),
+        rate_limit_token_burst=max(0, int(raw.get("rate_limit_token_burst", 0))),
         audit_max_size_mb=max(0, int(raw.get("audit_max_size_mb", 10))),
         audit_max_backups=max(0, int(raw.get("audit_max_backups", 5))),
         audit_compress=bool(raw.get("audit_compress", True)),
@@ -299,12 +364,19 @@ def _console_from_raw(raw: dict[str, Any], agent_user: str, agent_pass: str) -> 
 
 
 def load_config(path: str | Path | None = None) -> AppConfig:
-    """config.yml を読み込んで AppConfig を返す。"""
+    """config.yml を読み込んで AppConfig を返す。
+
+    ``${ENV_VAR}`` 形式の機密参照は環境変数から解決する。解決後の値は
+    ``AppConfig.raw`` (save() 用) には反映せず、平文が config.yml へ
+    書き戻されないようにする。
+    """
     config_path = _find_config(path).resolve()
     with open(config_path, "r", encoding="utf-8") as handle:
         raw: dict[str, Any] = yaml.safe_load(handle) or {}
 
-    servers_raw = raw.get("servers") or []
+    expanded = _expand_env(raw)
+
+    servers_raw = expanded.get("servers") or []
     servers: list[ServerConfig] = []
     for item in servers_raw:
         servers.append(
@@ -320,7 +392,7 @@ def load_config(path: str | Path | None = None) -> AppConfig:
     if len(ids) != len(set(ids)):
         raise ValueError(f"config.yml: サーバーIDが重複しています: {ids}")
 
-    agent_raw = raw.get("agent") or {}
+    agent_raw = expanded.get("agent") or {}
     agent = AgentConfig(
         timeout_seconds=float(agent_raw.get("timeout_seconds", 5.0)),
         tls_verify=bool(agent_raw.get("tls_verify", True)),
@@ -331,12 +403,12 @@ def load_config(path: str | Path | None = None) -> AppConfig:
     )
 
     console = _console_from_raw(
-        raw.get("console") or {},
+        expanded.get("console") or {},
         agent_user=os.environ.get("LINUX_MCP_CONSOLE_USER", ""),
         agent_pass=os.environ.get("LINUX_MCP_CONSOLE_PASS", ""),
     )
 
-    mcp_raw = raw.get("mcp") or {}
+    mcp_raw = expanded.get("mcp") or {}
     mcp = McpConfig(
         host=str(mcp_raw.get("host", "127.0.0.1")),
         port=int(mcp_raw.get("port", 8090)),

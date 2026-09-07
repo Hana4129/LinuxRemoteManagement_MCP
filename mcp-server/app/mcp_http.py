@@ -11,6 +11,7 @@ from .config import AppConfig
 from .db import TokenStore
 from .mcp_audit import McpAudit
 from .approvals import ApprovalStore
+from .mcp_ratelimit import install_rate_limit
 from .mcp_server import build_mcp
 
 
@@ -49,6 +50,17 @@ def create_mcp_http_app(config: AppConfig, store: TokenStore | None = None) -> F
             return await call_next(request)
         finally:
             reset_current_token(context)
+
+    # レート制限は最後に登録 (最外側) し、認証前の要求も含めて一律に適用する
+    install_rate_limit(
+        app,
+        per_minute=config.console.rate_limit_per_minute,
+        burst=config.console.rate_limit_burst,
+        write_per_minute=config.console.rate_limit_write_per_minute,
+        write_burst=config.console.rate_limit_write_burst,
+        token_per_minute=config.console.rate_limit_token_per_minute,
+        token_burst=config.console.rate_limit_token_burst,
+    )
 
     asgi = mcp.http_app(transport="streamable-http", json_response=True, path="/")
     app.mount(prefix, asgi)

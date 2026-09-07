@@ -5,6 +5,8 @@ PyYAML>=6.0
 Jinja2>=3.1
 fastmcp>=2.3
 PyJWT[crypto]>=2.9
+# トークン保存時暗号化 (AES-256-GCM, secretbox.py)
+cryptography>=42.0
 
 # 開発・テスト用
 pytest>=8.0

@@ -1,11 +1,17 @@
 """APIトークンの SQLite ストア。
 
-ファイルパーミッションは 0600 に設定する (POSIX)。
+- ファイルパーミッションは 0600 に設定する (POSIX)。
+- 生トークン (``token_raw``) は平文で保存しない。
+  AES-256-GCM による保存時暗号化を行い、キーは DB 外
+  (環境変数 ``LRM_TOKEN_ENCRYPTION_KEY`` または ``token_encryption.key``) で管理する。
+  旧バージョンで平文保存された行は起動時に自動で暗号化へ移行する。
+- 照合用の ``token_hash`` (SHA-256) は暗号化の影響を受けない (後方互換)。
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import os
 import secrets
 import sqlite3
@@ -14,6 +20,12 @@ from pathlib import Path
 from threading import RLock
 from typing import Any, Sequence
 
+from .secretbox import (
+    DEFAULT_KEY_FILE_NAME,
+    SecretBoxError,
+    is_encrypted,
+    resolve_secret_box,
+)
 from .tokens import (
     expiry_iso,
     generate_token,
@@ -23,6 +35,9 @@ from .tokens import (
     now_iso,
     token_prefix,
 )
+
+logger = logging.getLogger("linux_mcp.db")
+
 
 _SCHEMA_TABLES = """
 CREATE TABLE IF NOT EXISTS tokens (
@@ -200,17 +215,29 @@ class AgentCredential:
 
 
 class TokenStore:
-    def __init__(self, db_path: str | Path):
+    def __init__(self, db_path: str | Path, *, encryption_key: bytes | str | None = None):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = RLock()
+        # 保存時暗号化 (AES-256-GCM)。キーはDB外 (環境変数 or キーファイル) で管理する。
+        self._box = resolve_secret_box(
+            explicit_key=encryption_key,
+            key_file=self.db_path.parent / DEFAULT_KEY_FILE_NAME,
+        )
         with self._connect() as conn:
             conn.executescript(_SCHEMA_TABLES)
             self._migrate(conn)
+            self._migrate_encrypt_plaintext(conn)
             conn.executescript(_SCHEMA_INDEXES)
         try:
             os.chmod(self.db_path, 0o600)
         except OSError:
+            pass
+        # 平文→暗号化マイグレーションでWALに残った平文を本体へ反映して破棄する
+        try:
+            with self._connect() as conn:
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except sqlite3.Error:
             pass
 
     def _migrate(self, conn: sqlite3.Connection) -> None:
@@ -229,6 +256,37 @@ class TokenStore:
             conn.execute("ALTER TABLE agent_credentials ADD COLUMN agent_sync_state TEXT NOT NULL DEFAULT 'synced'")
         if credential_columns and "grace_ends_at" not in credential_columns:
             conn.execute("ALTER TABLE agent_credentials ADD COLUMN grace_ends_at TEXT")
+
+    def _migrate_encrypt_plaintext(self, conn: sqlite3.Connection) -> None:
+        """旧バージョンで平文保存されたトークンを保存時暗号化へ移行する。"""
+        for table in ("tokens", "agent_credentials"):
+            rows = conn.execute(
+                f"SELECT id, token_raw FROM {table} WHERE token_raw != ''"
+            ).fetchall()
+            for row in rows:
+                value = row["token_raw"]
+                if is_encrypted(value):
+                    continue
+                conn.execute(
+                    f"UPDATE {table} SET token_raw = ? WHERE id = ?",
+                    (self._box.encrypt(value), row["id"]),
+                )
+
+    def _decrypt_raw(self, value: str | None) -> str:
+        """DBに保存されたトークン値を復号する (失敗時はfail-closedで空を返す)。"""
+        if not value:
+            return ""
+        if not is_encrypted(value):
+            # 平文のまま残っている値 (起動時マイグレーション前の旧世代)。そのまま返す。
+            return value
+        try:
+            return self._box.decrypt(value)
+        except SecretBoxError:
+            logger.warning(
+                "トークンの復号に失敗しました (キー不一致の可能性)。"
+                "該当トークンをfail-closed (生値なし) として扱います。"
+            )
+            return ""
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, timeout=10)
@@ -297,6 +355,12 @@ class TokenStore:
         store_raw: bool = False,
         principal_id: str | None = None,
     ) -> TokenRecord:
+        """トークンを登録する。生トークンは常にAES-256-GCMで暗号化して保存する。
+
+        ``store_raw`` は互換用パラメータ (保存の可否ではない)。
+        True の場合、戻り値のレコードに生値をメモリ上で一時設定する
+        (DBには常に暗号化して保存され、平文では書き込まれない)。
+        """
         normalized = sorted({str(sid) for sid in server_ids})
         if not normalized:
             raise ValueError("server_ids は1つ以上指定してください")
@@ -312,7 +376,8 @@ class TokenStore:
                         (
                             token_id,
                             name,
-                            raw if store_raw else "",
+                            # 生トークンは平文で保存しない (AES-256-GCMで暗号化)
+                            self._box.encrypt(raw),
                             hash_token(raw),
                             token_prefix(raw),
                             json.dumps(normalized),
@@ -346,13 +411,12 @@ class TokenStore:
         return [self._row_to_record(row) for row in rows]
 
     def get_token(self, token_id: str) -> TokenRecord | None:
+        """トークンレコードを取得する (生トークンは含まれない)。"""
         with self._lock, self._connect() as conn:
             row = conn.execute("SELECT * FROM tokens WHERE id = ?", (token_id,)).fetchone()
         if row is None:
             return None
-        rec = self._row_to_record(row)
-        rec.token_raw = row["token_raw"]
-        return rec
+        return self._row_to_record(row)
 
     def get_by_raw(self, raw: str) -> TokenRecord | None:
         with self._lock, self._connect() as conn:
@@ -418,7 +482,8 @@ class TokenStore:
             conn.execute(
                 "INSERT INTO agent_credentials (id, server_id, name, agent_token_id, token_raw, created_at, expires_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (credential_id, server_id, name, agent_token_id, raw, now_iso(), expiry_iso(expires_in_days)),
+                # 生トークンは平文で保存しない (AES-256-GCMで暗号化)
+                (credential_id, server_id, name, agent_token_id, self._box.encrypt(raw), now_iso(), expiry_iso(expires_in_days)),
             )
         return self.get_agent_credential(credential_id)  # type: ignore[return-value]
 
@@ -473,7 +538,8 @@ class TokenStore:
                     conn.execute(
                         "INSERT INTO agent_credentials (id, server_id, name, agent_token_id, token_raw, created_at, expires_at, enabled) "
                         "VALUES (?, ?, ?, ?, ?, ?, ?, 1)",
-                        (new_id, old.server_id, old.name, old.agent_token_id, raw, now, new_expires),
+                        # 生トークンは平文で保存しない (AES-256-GCMで暗号化)
+                        (new_id, old.server_id, old.name, old.agent_token_id, self._box.encrypt(raw), now, new_expires),
                     )
                     break
                 except sqlite3.IntegrityError:
@@ -521,9 +587,10 @@ class TokenStore:
         return [dict(row) for row in rows]
 
     def get_agent_credential(self, credential_id: str) -> AgentCredential | None:
+        """credentialを取得する (生トークンは復号して設定する。API応答には含まれない)。"""
         with self._lock, self._connect() as conn:
             row = conn.execute("SELECT * FROM agent_credentials WHERE id=?", (credential_id,)).fetchone()
-        return self._row_to_agent_credential(row) if row else None
+        return self._row_to_agent_credential_decrypted(row) if row else None
 
     def find_agent_credential(self, server_id: str) -> AgentCredential | None:
         with self._lock, self._connect() as conn:
@@ -534,10 +601,11 @@ class TokenStore:
                 "ORDER BY created_at DESC, rowid DESC LIMIT 1",
                 (server_id,),
             ).fetchone()
-        credential = self._row_to_agent_credential(row) if row else None
+        credential = self._row_to_agent_credential_decrypted(row) if row else None
         return credential if credential and credential.active else None
 
     def list_agent_credentials(self) -> list[AgentCredential]:
+        """credential一覧を返す (生トークンは含まれない)。"""
         with self._lock, self._connect() as conn:
             rows = conn.execute("SELECT * FROM agent_credentials ORDER BY created_at DESC").fetchall()
         return [self._row_to_agent_credential(row) for row in rows]
@@ -560,17 +628,27 @@ class TokenStore:
                 "WHERE enabled=0 AND agent_sync_state='pending' AND agent_token_id<>'' "
                 "ORDER BY created_at ASC"
             ).fetchall()
-        return [self._row_to_agent_credential(row) for row in rows]
+        return [self._row_to_agent_credential_decrypted(row) for row in rows]
 
     @staticmethod
     def _row_to_agent_credential(row: sqlite3.Row) -> AgentCredential:
         keys = set(row.keys())
         return AgentCredential(
-            id=row["id"], server_id=row["server_id"], name=row["name"], agent_token_id=row["agent_token_id"], token_raw=row["token_raw"],
+            id=row["id"], server_id=row["server_id"], name=row["name"], agent_token_id=row["agent_token_id"],
+            token_raw="",  # 生値は呼び出し時に _row_to_agent_credential_decrypted で復号する
             created_at=row["created_at"], expires_at=row["expires_at"], enabled=bool(row["enabled"]),
             agent_sync_state=row["agent_sync_state"] if "agent_sync_state" in keys else "synced",
             grace_ends_at=row["grace_ends_at"] if "grace_ends_at" in keys else None,
         )
+
+    def _row_to_agent_credential_decrypted(self, row: sqlite3.Row) -> AgentCredential:
+        """agent_credentials 行を復号つきで AgentCredential へ変換する。
+
+        Agent呼び出し・失効同期など生値が必要な経路で使用する。
+        """
+        credential = self._row_to_agent_credential(row)
+        credential.token_raw = self._decrypt_raw(row["token_raw"])
+        return credential
 
     def list_permissions(self, principal_id: str | None = None) -> list[dict[str, Any]]:
         query = "SELECT principal_id, server_id, scope, enabled, created_at FROM permissions"
@@ -634,7 +712,8 @@ class TokenStore:
                 continue
             if server_id in server_ids or "*" in server_ids:
                 record = self._row_to_record(row)
-                record.token_raw = row["token_raw"]
+                # Agent転送 (fallback) に使うため呼び出し時に復号する
+                record.token_raw = self._decrypt_raw(row["token_raw"])
                 return record
         return None
 
@@ -681,7 +760,8 @@ class TokenStore:
                         (
                             new_id,
                             old_record.name,
-                            raw,
+                            # 生トークンは平文で保存しない (AES-256-GCMで暗号化)
+                            self._box.encrypt(raw),
                             token_hash,
                             prefix,
                             json.dumps(old_record.server_ids),

@@ -625,7 +625,6 @@ def import_token(request: Request, payload: TokenImportRequest) -> dict[str, Any
         scope=payload.scope,
         expires_in_days=payload.expires_in_days,
         created_by="console:import",
-        store_raw=True,
         principal_id=payload.principal_id,
     )
     log.info("トークン登録 id=%s name=%r", record.id, payload.name)
