@@ -8,8 +8,15 @@
 from __future__ import annotations
 
 import logging
+import sys
+from pathlib import Path
 
 import uvicorn
+
+# リポジトリルートを sys.path に追加して from console.* を解決する
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 from app.config import load_config
 from console.main import create_app

@@ -2,9 +2,15 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
+
+# リポジトリルートを sys.path に追加して from console.* を解決する
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 from app.approvals import ApprovalStore
 from app.config import AgentConfig, AppConfig, ConsoleConfig, ServerConfig
