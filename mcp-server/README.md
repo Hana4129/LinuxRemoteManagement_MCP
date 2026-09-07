@@ -195,6 +195,30 @@ servers:
   (`LRM_TOKEN_ENCRYPTION_KEY` を KMS/Vault から注入することで鍵管理を外部化できる)
 - 社内ネットワークでのみアクセス可能なホスト (127.0.0.1) で listen
 
+### 設定ファイルの機密情報保護 (Config Secret References)
+
+`config.yml` のシークレット (`console.password`, `console.siem_api_key`,
+`console.oidc_client_secret`, `agent.admin_token`, `agent.client_cert`,
+`agent.client_key`) は **環境変数参照** (`${ENV_VAR}` または `${ENV_VAR:-default}`)
+の形式で指定できる。読み込み時に環境変数の値に展開され、`save()` 時には
+参照形式がそのまま config.yml に書き戻されるため、シークレットが平文で
+ファイルへ永続化されることはない。
+
+```yaml
+console:
+  # 実際の値は環境変数で提供。設定ファイルには参照を保持。
+  password: ${LINUX_MCP_CONSOLE_PASS}
+  siem_api_key: ${MCP_SIEM_API_KEY:-}   # :- で空デフォルト
+agent:
+  admin_token: ${LINUX_MCP_AGENT_ADMIN_TOKEN}
+```
+
+- 未設定の環境変数は **fail-closed** で `ValueError` (デフォルト値 `:-` ありの場合は空文字)
+- `scripts/env.example` を参考に `/etc/linux-mcp-server/env` (chmod 600) へ配置し、
+  systemd の `EnvironmentFile` で読み込む (§1.4 参照)
+- `LINUX_MCP_CONSOLE_USER` / `LINUX_MCP_CONSOLE_PASS` は `console.username` /
+  `console.password` の fallback としても使用可能
+
 ### レート制限 (IP + トークン複合・操作別)
 
 コンソールと MCP HTTP の両方にトークンバケット方式のレート制限が適用される

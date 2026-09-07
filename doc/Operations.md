@@ -395,6 +395,53 @@ sudo chattr +a /opt/linux-remote-management-mcp/mcp-server/data/mcp_audit.log
 
 ---
 
+### 6.5 設定ファイルの機密情報保護 (Secret References)
+
+`config.yml` にシークレット (password, API Key, Token, 証明書パス等) を
+平文で保存しない。**環境変数参照** (`${ENV_VAR}`) の形式を使用する。
+
+```yaml
+console:
+  # 実際の値は環境変数で提供。config.yml には参照を保持。
+  username: ${LINUX_MCP_CONSOLE_USER}
+  password: ${LINUX_MCP_CONSOLE_PASS}
+  siem_api_key: ${MCP_SIEM_API_KEY:-}
+
+agent:
+  admin_token: ${LINUX_MCP_AGENT_ADMIN_TOKEN}
+  client_cert: ${MCP_AGENT_CLIENT_CERT:-}
+  client_key: ${MCP_AGENT_CLIENT_KEY:-}
+```
+
+#### 参照形式
+
+| 形式 | 説明 |
+|------|------|
+| `${VAR_NAME}` | 環境変数 `VAR_NAME` の値に展開。未設定の場合 **エラー** (fail-closed) |
+| `${VAR_NAME:-default}` | 未設定時に `default` を使用 |
+| `${VAR_NAME:-}` | 未設定時に空文字列 |
+
+#### 運用ベストプラクティス
+
+1. **シークレットは環境変数・Secret Store (Vault 等) から注入**
+   - systemd の `EnvironmentFile` に `/etc/linux-mcp-server/env` (chmod 600) を指定
+   - `mcp-server/scripts/env.example` をテンプレートとして使用
+   - 本番では Vault / KMS から動的に環境変数を注入することを推奨
+
+2. **config.yml は Git 管理可能**
+   - シークレットは含まれないため、リポジトリで安全に管理できる
+   - `data/tokens.db` と `env` ファイルは `.gitignore` 対象
+
+3. **save() 時の安全性**
+   - `save()` は元の `${ENV_VAR}` 参照をそのまま保持する
+   - 平文のシークレットが config.yml へ書き出されることはない
+
+4. **トークン暗号化**
+   - MCP トークンは AES-256-GCM で暗号化して DB に保存 (§3.1)
+   - 暗号化鍵は `LRM_TOKEN_ENCRYPTION_KEY` 環境変数 (Vault から注入推奨)
+
+---
+
 ## 7. 監視
 
 ### 7.1 ヘルスチェック
