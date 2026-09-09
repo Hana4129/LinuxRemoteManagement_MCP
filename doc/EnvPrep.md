@@ -181,7 +181,9 @@ Plane貼付テンプレ (A):
 
 #### A-5. 実施記録 (acemagic01, 2026-09-10)
 
-- ホスト: `acemagic01` / OS: Ubuntu 24.04.3 LTS (noble) / NTP: NTPSynchronized=yes
+- ホスト: `acemagic01` (FQDN=acemagic01) / kernel 7.0.0-31-generic / arch x86_64
+- OS: Ubuntu 24.04.3 LTS (noble) / NTP: NTPSynchronized=yes
+- IP: `wlp2s0` 192.168.10.114/24 (有線 enp1s0/enp3s0 は DOWN。Wi-Fi接続のため固定IP化または有線化を推奨)
 - 権限: root 確認 (当初 uid=1000/sudo-ng → root で解消)
 - ポート: 既定8443は docker-proxy (pid=3570/3577) が占有 → **9443** へ変更
   (Agent `agent.listen: ":9443"` + MCP `servers[].url` + firewall の3点連動)
