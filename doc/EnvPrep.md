@@ -49,7 +49,65 @@ sudo bash scripts/setup-tokens.sh /etc/lrm-mcp-agent/config.yml
 # 起動・確認
 sudo systemctl enable --now lrm-mcp-agent
 systemctl is-active lrm-mcp-agent
-curl http://127.0.0.1:8443/v1/health
+curl -sk https://127.0.0.1:8443/v1/health; echo
+```
+
+### A-4. 確認手順（Agentホスト上で実施・結果をPlaneに貼付）
+
+> 実行場所の凡例: `[A]`=Agentホスト、`[M]`=MCP Serverホスト、`[V]`=検証端末。
+> 秘密鍵・生トークンは出力・チケットに貼らないこと。
+
+```bash
+# [A] 1. OS・カーネル・アーキテクチャ
+lsb_release -a 2>/dev/null || cat /etc/os-release
+uname -r
+arch
+# 期待: Ubuntu 22.04/24.04 または Rocky 9、x86_64
+
+# [A] 2. ホスト名・名前解決・IP
+hostname -f
+getent hosts "$(hostname -f)"
+ip -brief addr show
+# 期待: FQDN が引けること、提供情報 (10.0.0.10 等) と一致すること
+
+# [A] 3. 権限 (root / sudo)
+id
+id -u   # 期待: 0 (root 直実行の場合)
+sudo -n true && echo "sudo-ok"
+# 期待: root または sudo 可能な専用ユーザーであること
+
+# [A] 4. 時刻同期 (監査ログ時刻の正確性)
+timedatectl status | grep -E "System clock|NTP service|synchronized"
+timedatectl show | grep NTPSynchronized
+# chrony 利用時:
+chronyc tracking 2>/dev/null | head -n 8 || systemctl status chrony* systemd-timesyncd* --no-pager | head -n 20
+# 期待: synchronized: yes / NTPSynchronized=yes / chrony の Leap status が Normal
+```
+
+```bash
+# [A] 5. Agent 導入後の到達性 (導入実施後に確認)
+ss -tlnp | grep 8443
+curl -sk https://127.0.0.1:8443/v1/health; echo
+# 期待: {"status":"ok"} 等の 200 応答 (Agent README §Quick Start)
+
+# [M] 6. MCP Serverホストからの到達性 (firewall越し)
+curl -sk https://<agent-fqdn-or-ip>:8443/v1/health; echo
+nc -zv <agent-fqdn-or-ip> 8443
+# 期待: 200 応答 / succeeded。失敗時は D節 (firewall) を見直す
+
+# [V] 7. プリフライト (MCP Server側から)
+cd mcp-server
+python scripts/verify_env.py --network   # "Agent到達性 [<node-id>]" が PASS であること
+```
+
+Plane貼付テンプレ (A):
+```
+[A] OS: <lsb_release結果> / kernel <uname -r> / arch <arch>
+[A] FQDN: <hostname -f> / IP: <ip addr結果>
+[A] 権限: <id結果> / sudo-ok: <yes/no>
+[A] NTP: <synchronized: yes/no> (<chrony|timesyncd>)
+[A] Agent到達: <curl結果> / MCP Serverから: <curl/nc結果>
+[A] verify_env: <Agent到達性 PASS/FAIL>
 ```
 
 ---
@@ -81,6 +139,59 @@ sudo install -m 644 scripts/linux-mcp-console.service /etc/systemd/system/
 sudo install -m 644 scripts/linux-mcp-http.service  /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now linux-mcp-console.service linux-mcp-http.service
+```
+
+### B-4. 確認手順（MCP Serverホスト上で実施・結果をPlaneに貼付）
+
+```bash
+# [B] 1. OS・Python・systemd
+cat /etc/os-release | grep -E "^(NAME|VERSION)="
+python3 --version   # 期待: 3.10 以上
+systemctl --version | head -n 2
+
+# [B] 2. 専用ユーザー・権限
+id linux-mcp
+sudo -n true && echo "sudo-ok"
+
+# [B] 3. systemd unit の配置と起動状態
+ls -l /etc/systemd/system/linux-mcp-console.service /etc/systemd/system/linux-mcp-http.service
+sudo systemctl daemon-reload
+systemctl is-enabled linux-mcp-console.service linux-mcp-http.service
+systemctl is-active linux-mcp-console.service linux-mcp-http.service
+# 期待: enabled / active。失敗時は次で原因特定:
+journalctl -u linux-mcp-console.service --no-pager -n 50
+journalctl -u linux-mcp-http.service --no-pager -n 50
+
+# [B] 4. listen ポート (管理NW/利用者NW分離の前提)
+ss -tlnp | grep -E ":(8080|8090)"
+# 期待: 127.0.0.1:8080 / 127.0.0.1:8090 (0.0.0.0 の場合は D節で要是正)
+
+# [B] 5. コンソール応答
+curl -s http://127.0.0.1:8080/api/meta; echo
+# 期待: HTTP 200 の JSON (verify_env.py の「コンソール到達性」も PASS になること)
+
+# [B] 6. データ・秘密ファイルの権限
+ls -ld /opt/linux-remote-management-mcp/mcp-server/data
+stat -c "%a %U:%G %n" /opt/linux-remote-management-mcp/mcp-server/data
+ls -l /etc/linux-mcp-server/env
+stat -c "%a %n" /etc/linux-mcp-server/env
+# 期待: data=700、env=600 (Operations.md §1.4)
+
+# [B] 7. リバースプロキシ有無 (ある場合のみ)
+nginx -T 2>/dev/null | grep -E "listen|server_name|proxy_pass|ssl_certificate" | head -n 20
+# 期待: TLS終端位置 (proxy/console のどちらか) が特定できること
+
+# [V] 8. プリフライト
+cd mcp-server
+python scripts/verify_env.py --network   # 「コンソール到達性」PASS を確認
+```
+
+Plane貼付テンプレ (B):
+```
+[B] OS: <NAME/VERSION> / Python: <python3 --version> / systemd: <version>
+[B] unit: console=<active/inactive> http=<active/inactive> (enable=<yes/no>)
+[B] listen: <ss結果> / /api/meta: <HTTPコード>
+[B] 権限: data=<700?> env=<600?> / proxy: <有(終端位置)/無>
 ```
 
 ---
@@ -115,6 +226,58 @@ sudo systemctl enable --now linux-mcp-console.service linux-mcp-http.service
 - 秘密鍵を含むため、**暗号化した zip / 社内Secret基盤** で受け渡し
 - パスフレーズ付き private key は MCP Server/Agent が自動起動できないため、**解除して配置**（ファイル権限 600 で保護）
 
+### C-5. 確認手順（受領物の検収・結果をPlaneに貼付）
+
+> ⚠️ 秘密鍵の中身・パスフレーズは出力・チケットに貼らない。`subject/issuer/SAN/期限/検証結果` のみ貼る。
+
+```bash
+# [V] 1. 受領物の一覧 (期待: ca.crt / agent.crt / agent.key / client.crt / client.key / crl.pem(任意))
+ls -l ca.crt agent.crt agent.key client.crt client.key crl.pem 2>&1
+
+# [V] 2. 各証明書の subject / issuer / 期限
+for f in ca.crt agent.crt client.crt; do
+  echo "=== $f ==="
+  openssl x509 -in "$f" -noout -subject -issuer -dates
+done
+# 期待: issuer が CA の subject と一致、notAfter が未来 (P2-12 は残14日以上推奨)
+
+# [V] 3. SAN (Agent サーバー証明書)
+openssl x509 -in agent.crt -noout -ext subjectAltName
+# 期待: DNS:agent-prod-01.example.local, IP:10.0.0.10 を含む (C-2 の表と一致)
+
+# [V] 4. チェーン検証 (CA署名の正当性)
+openssl verify -CAfile ca.crt agent.crt    # 期待: agent.crt: OK
+openssl verify -CAfile ca.crt client.crt   # 期待: client.crt: OK
+
+# [V] 5. 証明書と秘密鍵のペア一致 (modulus ハッシュ比較。秘密鍵自体は表示しない)
+openssl x509 -in agent.crt -noout -modulus | openssl md5
+openssl rsa  -in agent.key -modulus -noout 2>/dev/null | openssl md5
+# 期待: 2つのハッシュが一致。client 側も同様:
+openssl x509 -in client.crt -noout -modulus | openssl md5
+openssl rsa  -in client.key -modulus -noout 2>/dev/null | openssl md5
+
+# [V] 6. 失効配布物 (ある場合)
+openssl crl -in crl.pem -noout -text 2>/dev/null | grep -E "Last Update|Next Update" | head -n 4
+# OCSP の場合: responder URL を記録 (openssl x509 -in agent.crt -noout -ocsp_uri)
+
+# [B/A] 7. 配置後の権限 (MCP Server / Agent ホスト)
+stat -c "%a %U:%G %n" /opt/linux-mcp/client.crt /opt/linux-mcp/client.key
+stat -c "%a %U:%G %n" /etc/linux-agent/server.crt /etc/linux-agent/server.key /etc/linux-agent/ca.crt
+# 期待: *.crt=644、*.key=600 (doc/mTLS.md §3.2/§4.2)
+
+# [B] 8. プリフライト (MCP Server側)
+cd mcp-server
+python scripts/verify_env.py   # 「mTLS クライアント証明書」が鍵一致OK・期限残存で PASS/WARN のいずれか
+```
+
+Plane貼付テンプレ (C):
+```
+[C] 受領: ca.crt=<○/×> agent.crt/key=<○/×> client.crt/key=<○/×> crl=<有/無/OCSP(URL)>
+[C] agent.crt: subject=<...> issuer=<...> notAfter=<...> SAN=<...>
+[C] verify: agent=<OK/NG> client=<OK/NG> / 鍵ペア一致: agent=<一致/不一致> client=<一致/不一致>
+[C] 配置権限: crt=<644?> key=<600?> / verify_env mTLS: <PASS/WARN/FAIL>
+```
+
 ---
 
 ## D. ネットワーク境界情報（P2-10）
@@ -140,6 +303,52 @@ sudo ufw allow from 10.0.0.20 to any port 8443 proto tcp      # Agent: MCP Serve
 sudo ufw default deny incoming
 ```
 
+### D-3. 確認手順（境界の実測・結果をPlaneに貼付）
+
+```bash
+# [B/A] 1. 経路とアドレス (申告CIDRとの突合用)
+ip route show
+ip -brief addr show
+
+# [B/A] 2. firewall の現状 (いずれか。操作権限のある方式で)
+sudo ufw status numbered 2>/dev/null
+sudo firewall-cmd --list-all 2>/dev/null
+sudo iptables -L -n --line-numbers 2>/dev/null | head -n 40
+# 期待: 管理NW→8080、利用者NW→8090、MCP Server→Agent:8443 のみ許可
+
+# [B/A] 3. listen アドレス (0.0.0.0 露出の有無)
+ss -tlnp | grep -E ":(8080|8090|8443)"
+# 期待: console=127.0.0.1:8080 (管理NW公開はproxy経由)、mcp=利用者NW向け、agent=8443
+
+# [M→A] 4. MCP Server → Agent の疎通
+nc -zv <agent-ip> 8443
+curl -sk -o /dev/null -w "%{http_code}\n" https://<agent-ip>:8443/v1/health
+# 期待: open / 200 (401/403 も「到達OK」として扱う。verify_env.py と同じ判定)
+
+# [管理端末→M] 5. 管理NW → console の疎通
+curl -s -o /dev/null -w "%{http_code}\n" http://<mcp-server-ip>:8080/api/meta
+# 期待: 200。利用者NWからは 8080 が不通であることも確認 (D-1 の分離確認):
+# (利用者NW端末で) nc -zv <mcp-server-ip> 8080  # 期待: 失敗 (拒否/タイムアウト)
+
+# [利用者NW→M] 6. 利用者NW → MCP HTTP の疎通
+ss -tlnp | grep 8090
+# (利用者NW端末で) nc -zv <mcp-server-ip> 8090  # 期待: 成功
+
+# [V] 7. プリフライト (設定面の自動判定)
+cd mcp-server
+python scripts/verify_env.py   # 「listen address」「Agent TLS検証」「コンソール認証」を確認
+grep -E "host:|tls_verify|auth_mode" config.yml
+# 期待: console/mcp の host が 0.0.0.0 でない、tls_verify=true、auth_mode=oidc or Basic資格あり
+```
+
+Plane貼付テンプレ (D):
+```
+[D] 管理NW: <CIDR> / 利用者NW: <CIDR> / VPN: <有/無> / firewall方式・操作者: <ufw/firewalld/ACL・氏名>
+[D] firewall現状: <ufw status / firewall-cmd 要約の貼付>
+[D] listen: <ss結果> / M→A疎通: <nc/curl結果> / 管理→console: <HTTPコード> / 利用者→8080不通: <確認済/未>
+[D] verify_env: listen=<PASS/WARN> TLS検証=<PASS/WARN> 認証=<PASS/WARN>
+```
+
 ---
 
 ## E. systemd 導入環境（root 権限）
@@ -150,19 +359,91 @@ sudo ufw default deny incoming
   - `linux-mcp`（MCP Server）と `lrm-mcp-agent`（Agent）の専用ユーザー作成権限
   - `/etc/systemd/system/` へ unit を配置する権限
 
+### E-1. 確認手順（両ホスト共通・結果をPlaneに貼付）
+
+```bash
+# 1. root / sudo (破壊なしの読み取り確認)
+whoami
+id -u   # 期待: 0
+sudo -n true && echo "sudo-ok"
+
+# 2. init が systemd であること (コンテナ等では PID1 が異なる場合あり)
+ps -p 1 -o comm=
+systemctl --version | head -n 2
+systemd-detect-virt 2>/dev/null || echo "virt: bare-metal/unknown"
+# 期待: comm=systemd。container/docker の場合は unit 配置先ホストでの再実施が必要
+
+# 3. 専用ユーザー (導入前は「不在」で正常。導入後は存在)
+id linux-mcp      # [B] MCP Serverホスト
+id lrm-mcp-agent  # [A] Agentホスト
+
+# 4. unit 配置権限の実証 (空ファイルではなく実unitで。配置後の確認)
+ls -l /etc/systemd/system/linux-mcp-*.service /etc/systemd/system/lrm-mcp-agent.service 2>&1
+# 書き込み権限の事前確認 (安全な touch 検証。残さない):
+sudo touch /etc/systemd/system/.writetest && sudo rm /etc/systemd/system/.writetest && echo "unit-dir-writable"
+
+# 5. 有効化・起動の確認 (導入実施後)
+sudo systemctl daemon-reload
+systemctl is-enabled linux-mcp-console.service linux-mcp-http.service 2>&1  # [B]
+systemctl is-active  linux-mcp-console.service linux-mcp-http.service 2>&1  # [B]
+systemctl is-enabled lrm-mcp-agent 2>&1   # [A]
+systemctl is-active  lrm-mcp-agent 2>&1   # [A]
+# 期待: enabled/active。失敗時は:
+journalctl -u linux-mcp-console.service --no-pager -n 30 2>&1 | tail -n 30  # [B]
+journalctl -u lrm-mcp-agent --no-pager -n 30 2>&1 | tail -n 30               # [A]
+
+# 6. プリフライト (unit ファイルの存在チェックに対応)
+cd mcp-server
+python scripts/verify_env.py   # 「systemd unit」「運用スクリプト」の項目を確認
+```
+
+Plane貼付テンプレ (E):
+```
+[E] ホスト: <B/A> / whoami: <...> (uid=<...>) / sudo: <ok/ng>
+[E] PID1: <systemd?> / systemctl: <version> / virt: <...>
+[E] 専用ユーザー: <存在/不在> / unit配置権限: <writable/ng>
+[E] unit状態: <enabled/active の実測値> / verify_env: <systemd unit PASS/WARN>
+```
+
 ---
 
 ## F. 最終確認（事前準備完了判定）
 
+### F-1. プリフライトの実行（判定前の必須ゲート）
+
+```bash
+cd mcp-server
+python scripts/verify_env.py --network
+# 期待: FAIL=0。WARN は該当タスク (P0-2/P2-12/P2-10等) の前提として F-2 に記録する。
+# JSONで記録する場合:
+python scripts/verify_env.py --network --json > /tmp/verify_env_$(date +%F).json
+# 要約行 (summary: PASS=x WARN=y FAIL=z SKIP=w) をPlaneに貼る
 ```
-[ ] A: 別Linuxサーバー（Agent導入用）が提供された
-[ ] B: 本番MCP Server導入サーバーが提供された
-[ ] C: mTLS用証明書一式（CA / server / client / CRL）が発行・受け渡しされた
-[ ] D: ネットワーク境界情報（管理NW/利用者NW/VPN/firewall権限）が判明した
-[ ] E: systemd 導入が可能（root権限）である
+
+```text
+[ ] A: 別Linuxサーバー（Agent導入用）が提供された（A-4 の貼付あり）
+[ ] B: 本番MCP Server導入サーバーが提供された（B-4 の貼付あり）
+[ ] C: mTLS用証明書一式（CA / server / client / CRL）が発行・受け渡しされた（C-5 の貼付あり）
+[ ] D: ネットワーク境界情報（管理NW/利用者NW/VPN/firewall権限）が判明した（D-3 の貼付あり）
+[ ] E: systemd 導入が可能（root権限）である（E-1 の貼付あり）
+[ ] F-1: verify_env.py --network で FAIL=0（要約行を貼付）
 ```
 
 すべて `[x]` になったら、Plane 事前準備チケットに記録し、**P0-2 → 3.1 → P1-6 → P2-10 → P2-12** の順に実環境検証を実施する。
+
+### F-2. Plane 事前準備チケットへの記録テンプレ
+
+```text
+[事前準備 完了報告] <日付> 実施者: <氏名>
+- A: <OS/FQDN/IP/権限/NTP/到達性の要約> (詳細は A-4 貼付)
+- B: <OS/Python/unit/listen//api/meta の要約> (詳細は B-4 貼付)
+- C: <受領物○×/notAfter/SAN/verify/鍵ペア一致の要約> (詳細は C-5 貼付)
+- D: <CIDR/VPN/firewall方式/疎通結果の要約> (詳細は D-3 貼付)
+- E: <PID1/systemd/権限/unit状態の要約> (詳細は E-1 貼付)
+- verify_env: summary: PASS=<x> WARN=<y> FAIL=0 SKIP=<z> (JSON添付任意)
+- 残WARNと対応方針: <例: mTLS未配置のためP0-2実施時に配置する>
+- 次工程: P0-2 → 3.1 → P1-6 → P2-10 → P2-12 の順に実環境検証へ
+```
 
 ---
 
