@@ -1,0 +1,50 @@
+# =====================================================================
+# Linux Remote Management MCP Server 設定（本番用雛形）
+#
+# 実ファイル config.prd.yml は .gitignore で除外されます。
+# 本番では secrets を env変数または Secret Manager で注入してください。
+# 実行: RUN_MODE=prd python -m app
+# =====================================================================
+
+console:
+  host: "127.0.0.1"
+  port: 8080
+  data_dir: "/var/lib/linux-mcp"
+  auth_required: true
+  auth_mode: oidc           # 本番では oidc を推奨
+  oidc_issuer: ${LINUX_MCP_OIDC_ISSUER}
+  oidc_audience: ${LINUX_MCP_OIDC_AUDIENCE}
+  oidc_jwks_url: ${LINUX_MCP_OIDC_JWKS_URL}
+  oidc_client_id: ${LINUX_MCP_OIDC_CLIENT_ID}
+  oidc_client_secret: ${LINUX_MCP_OIDC_CLIENT_SECRET}
+  oidc_redirect_uri: ${LINUX_MCP_OIDC_REDIRECT_URI}
+  session_cookie_secure: true
+  # Basic認証に切替える場合:
+  # auth_mode: basic
+  # username: ${LINUX_MCP_CONSOLE_USER}
+  # password: ${LINUX_MCP_CONSOLE_PASS}
+  siem_webhook: ${MCP_SIEM_WEBHOOK:-}
+  siem_api_key: ${MCP_SIEM_API_KEY:-}
+
+mcp:
+  host: "127.0.0.1"
+  port: 8090
+  path: "/"
+  enabled: true
+  stdio_token_env: LINUX_MCP_TOKEN
+
+agent:
+  timeout_seconds: 5
+  tls_verify: /etc/linux-mcp/certs/ca.crt
+  user_agent: linux-mcp-server/0.1
+  client_cert: ${MCP_AGENT_CLIENT_CERT}
+  client_key: ${MCP_AGENT_CLIENT_KEY}
+  admin_token: ${LINUX_MCP_AGENT_ADMIN_TOKEN}
+
+# ---- 管理対象ノード ----
+servers:
+  - id: ubuntu-server1
+    name: "ACEMAGIC #01"
+    url: ${MCP_AGENT_1_URL}
+    env: production
+    description: "リモートUbuntuサーバー（本番）"

@@ -47,13 +47,13 @@ mcp:
 
 agent:
   timeout_seconds: 5
-  tls_verify: false        # 自己署名証明書の開発環境では false にする
+  tls_verify: ./certs/acemagic01-ca.crt   # 実CA署名のAgent証明書を検証 (acemagic01検証用CA)
   user_agent: linux-mcp-server/0.1
   # Agent側の admin_token_hash と対応する秘密。管理endpointの失効同期専用。
   # admin_token: ${LINUX_MCP_AGENT_ADMIN_TOKEN}
-  # mTLS: Agent 側でクライアント証証書検証を有効にする場合に設定する
-  # client_cert: ${MCP_AGENT_CLIENT_CERT:-}
-  # client_key: ${MCP_AGENT_CLIENT_KEY:-}
+  # mTLS: Agent 側でクライアント証明書検証を有効にする場合に設定する
+  client_cert: ./certs/mcp-client.crt     # acemagic01検証用 (CN=mcp-client)
+  client_key: ./certs/mcp-client.key
 
 # ---- 管理対象ノード ----
 servers:

@@ -1,0 +1,53 @@
+# =====================================================================
+# Linux Remote Management MCP Server 設定雛形
+#
+# 環境ごとに config.{env}.yml を作成して使用してください。
+#   config.dev.yml       -> 開発用デフォルト (RUN_MODE=dev)
+#   config.testing.yml   -> 総合テスト用 (RUN_MODE=testing)
+#   config.prd.yml       -> 本番用 (RUN_MODE=prd, git追跡外)
+#
+# 実ファイルは env変数参照 (${VAR} / ${VAR:-default}) を活用し、
+# secretsを平文で書かないでください。
+# =====================================================================
+
+console:
+  host: "127.0.0.1"
+  port: 8080
+  data_dir: "./data"
+  auth_required: true
+  auth_mode: basic         # basic または oidc
+  # OIDC設定 (必要なときのみ)
+  # oidc_issuer: ${LINUX_MCP_OIDC_ISSUER}
+  # oidc_audience: ${LINUX_MCP_OIDC_AUDIENCE}
+  # oidc_jwks_url: ${LINUX_MCP_OIDC_JWKS_URL}
+  # oidc_client_id: ${LINUX_MCP_OIDC_CLIENT_ID}
+  # oidc_client_secret: ${LINUX_MCP_OIDC_CLIENT_SECRET}
+  # oidc_redirect_uri: ${LINUX_MCP_OIDC_REDIRECT_URI}
+  # session_cookie_secure: true
+  # username/password : 環境変数 LINUX_MCP_CONSOLE_USER / _PASS で設定
+  # siem_webhook: ${MCP_SIEM_WEBHOOK:-}
+  # siem_api_key: ${MCP_SIEM_API_KEY:-}
+
+mcp:
+  host: "127.0.0.1"
+  port: 8090
+  path: "/"
+  enabled: true
+  stdio_token_env: LINUX_MCP_TOKEN
+
+agent:
+  timeout_seconds: 5
+  tls_verify: true         # True=システムCA / False=無検証 / str=CAファイルパス
+  user_agent: linux-mcp-server/0.1
+  # mTLS: Agent側でクライアント証明書検証を有効にする場合に設定
+  # client_cert: ${MCP_AGENT_CLIENT_CERT}
+  # client_key: ${MCP_AGENT_CLIENT_KEY}
+  # admin_token: ${LINUX_MCP_AGENT_ADMIN_TOKEN}
+
+# ---- 管理対象ノード ----
+servers:
+  - id: "ubuntu-server1"
+    name: "Ubuntu Server #01"
+    url: "${MCP_AGENT_1_URL:-https://ubuntu-server1.local:9443}"
+    env: production
+    description: "リモートUbuntuサーバー"

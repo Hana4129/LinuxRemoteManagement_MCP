@@ -46,7 +46,9 @@ class ServerConfig:
 @dataclass(frozen=True)
 class AgentConfig:
     timeout_seconds: float = 5.0
-    tls_verify: bool = True
+    # TLS検証: True=システムCA / False=無検証 / strパス=指定CAファイルで検証
+    # (httpx の verify 引数へそのまま渡す。CAファイル指定で自前CA署名の検証が可能)
+    tls_verify: bool | str = True
     user_agent: str = "linux-mcp-server/0.1"
     # mTLS: クライアント証明書 (MCP Server 側)。client_key と対で指定する。
     client_cert: str = ""
@@ -327,6 +329,26 @@ def _find_config(explicit: str | Path | None) -> Path:
     )
 
 
+def _tls_verify_from_raw(raw: dict[str, Any]) -> bool | str:
+    """agent.tls_verify を bool または CAファイルパス文字列として解釈する。
+
+    - true/false (bool) → そのまま
+    - "true"/"false" (文字列) → boolへ変換
+    - その他の文字列 → CAファイルパス (httpx verifyへそのまま渡す)
+    """
+    value = raw.get("tls_verify", True)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "yes", "on", "1"}:
+            return True
+        if lowered in {"false", "no", "off", "0", ""}:
+            return False
+        return value
+    return bool(value)
+
+
 def _console_from_raw(raw: dict[str, Any], agent_user: str, agent_pass: str) -> ConsoleConfig:
     user = str(raw.get("username", "")) or agent_user
     password = str(raw.get("password", "")) or agent_pass
@@ -401,7 +423,7 @@ def load_config(path: str | Path | None = None) -> AppConfig:
     agent_raw = expanded.get("agent") or {}
     agent = AgentConfig(
         timeout_seconds=float(agent_raw.get("timeout_seconds", 5.0)),
-        tls_verify=bool(agent_raw.get("tls_verify", True)),
+        tls_verify=_tls_verify_from_raw(agent_raw),
         user_agent=str(agent_raw.get("user_agent", "linux-mcp-server/0.1")),
         client_cert=str(agent_raw.get("client_cert", "")),
         client_key=str(agent_raw.get("client_key", "")),
@@ -457,5 +479,48 @@ def _is_loopback_url(url: str) -> bool:
     try:
         host = (urlsplit(url).hostname or "").lower()
     except ValueError:
+
+def resolve_config_path() -> Path:
+    """環境変数から設定ファイルのパスを解決する。
+
+    優先順位:
+    1. MCP_CONFIG_FILE がセットされていればそのファイルを使用
+    2. なければ RUN_MODE を読み、対応するファイルを使用
+       - dev     -> config.dev.yml
+       - testing -> config.testing.yml
+       - prd     -> config.prd.yml
+       - その他  -> config.dev.yml
+    3. マップ先が存在しなければ config.dev.yml へフォールバック
+    """
+    custom = os.environ.get("MCP_CONFIG_FILE")
+    if custom:
+        p = Path(custom)
+        if p.is_file():
+            return p
+        raise FileNotFoundError(f"MCP_CONFIG_FILE={custom} が存在しません")
+
+    mode = os.environ.get("RUN_MODE", "dev")
+    mapping = {
+        "dev": "config.dev.yml",
+        "testing": "config.testing.yml",
+        "prd": "config.prd.yml",
+    }
+    candidate = mapping.get(mode, "config.dev.yml")
+    if Path(candidate).is_file():
+        return Path(candidate)
+
+    # フォールバック: config.dev.yml
+    fallback = Path("config.dev.yml")
+    if fallback.is_file():
+        return fallback
+
+    raise FileNotFoundError(
+        f"設定ファイルが見つかりません (RUN_MODE={mode}, candidate={candidate})"
+    )
+
+
+def load_config_auto() -> AppConfig:
+    """環境変数に基づいて設定ファイルを自動解決して読み込む。"""
+    return _load_config_from_path(resolve_config_path())
         return False
     return host in {"localhost", "127.0.0.1", "::1"} or host.endswith(".localhost")

@@ -15,3 +15,6 @@ data/
 
 # ログ
 *.log
+
+# 本番設定（secrets含むためgit追跡外）
+config.prd.yml

@@ -1,0 +1,40 @@
+# =====================================================================
+# Linux Remote Management MCP Server 設定（総合テスト用）
+#
+# mTLS有効・acemagic01実環境向け。
+# 実行: RUN_MODE=testing python -m app
+# =====================================================================
+
+console:
+  host: "127.0.0.1"
+  port: 8080
+  data_dir: "./data"
+  auth_required: true
+  auth_mode: basic
+  # 本格検証時には環境変数で資格を与える
+  # username: ${LINUX_MCP_CONSOLE_USER}
+  # password: ${LINUX_MCP_CONSOLE_PASS}
+
+mcp:
+  host: "127.0.0.1"
+  port: 8090
+  path: "/"
+  enabled: true
+  stdio_token_env: LINUX_MCP_TOKEN
+
+agent:
+  timeout_seconds: 5
+  tls_verify: ./certs/acemagic01-ca.crt   # 実CA署名のAgent証明書を検証
+  user_agent: linux-mcp-server/0.1
+  # mTLS: acemagic01検証用クライアント証明書
+  client_cert: ./certs/mcp-client.crt
+  client_key: ./certs/mcp-client.key
+  # admin_token: ${LINUX_MCP_AGENT_ADMIN_TOKEN}
+
+# ---- 管理対象ノード ----
+servers:
+  - id: ubuntu-server1
+    name: "ACEMAGIC #01"
+    url: https://ubuntu-server1.local:9443
+    env: production
+    description: "リモートUbuntuサーバー（Agent導入済み・mTLS有効）"

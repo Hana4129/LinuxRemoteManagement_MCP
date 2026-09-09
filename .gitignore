@@ -6,3 +6,5 @@ nul
 __pycache__/
 *.pyc
 *.pyo
+*.crt
+*.key

@@ -1,0 +1,51 @@
+# =====================================================================
+# Linux Remote Management MCP Server 設定（開発用・デフォルト）
+#
+# mTLS無効・モックAgent含む・最小構成。
+# 開発時に `python -m app` で起動するとこのファイルが使われる。
+# =====================================================================
+
+console:
+  host: "127.0.0.1"
+  port: 8080
+  data_dir: "./data"
+  auth_required: true
+  auth_mode: basic
+  # 開発時は認証を緩める場合は以下を設定
+  # username: admin
+  # password: dev
+
+mcp:
+  host: "127.0.0.1"
+  port: 8090
+  path: "/"
+  enabled: true
+  stdio_token_env: LINUX_MCP_TOKEN
+
+agent:
+  timeout_seconds: 5
+  tls_verify: false        # 開発時はTLS検証を無効化（自己署名証明書対応）
+  user_agent: linux-mcp-server/0.1
+  # mTLS: 開発時は無効
+  client_cert: ""
+  client_key: ""
+
+# ---- 管理対象ノード ----
+servers:
+  - id: dev-web-01
+    name: "開発 Web #01"
+    url: http://127.0.0.1:8443
+    env: development
+    description: "モックAgentでの動作確認用"
+
+  - id: dev-db-01
+    name: "開発 DB #01"
+    url: http://127.0.0.1:8444
+    env: development
+    description: "モックAgentでの動作確認用"
+
+  - id: ubuntu-server1
+    name: "Ubuntu Server #01"
+    url: https://ubuntu-server1.local:9443
+    env: testing
+    description: "リモートUbuntuサーバー（Agent導入済み・mTLS無効）"
