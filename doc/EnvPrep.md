@@ -191,6 +191,8 @@ Plane貼付テンプレ (A):
   (9/7 00:20, 9580824 bytes → 9/10 01:00, 9596484 bytes)
 - 再起動後: pid=25332 active / `*:9443` LISTEN /
   `curl -sk https://127.0.0.1:9443/v1/health` → `{"agent_version":"0.1.0","hostname":"lrm-mcp-agent","status":"ok"}`
+- MCP Server側からの疎通 (2026-09-10, Windows端末):
+  `curl -sk https://ubuntu-server1.local:9443/v1/health` → 同JSON (200)。mDNS解決○・到達○
 - 判定: A-1 (4○全合格) / A-4 (到達○)。A-3導入は不要 (稼働中+最新化済み)
 - 次工程: MCP Server側の node登録 (`https://<acemagic01>:9443`) + firewall 9443許可 +
   `verify_env.py --network` の「Agent到達性」PASS確認
