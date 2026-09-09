@@ -179,6 +179,20 @@ Plane貼付テンプレ (A):
 [A] verify_env: <Agent到達性 PASS/FAIL>
 ```
 
+#### A-5. 実施記録 (acemagic01, 2026-09-10)
+
+- ホスト: `acemagic01` / OS: Ubuntu 24.04.3 LTS (noble) / NTP: NTPSynchronized=yes
+- 権限: root 確認 (当初 uid=1000/sudo-ng → root で解消)
+- ポート: 既定8443は docker-proxy (pid=3570/3577) が占有 → **9443** へ変更
+  (Agent `agent.listen: ":9443"` + MCP `servers[].url` + firewall の3点連動)
+- Agent更新: `/usr/local/bin/lrm-mcp-agent` を最新ビルドへ更新
+  (9/7 00:20, 9580824 bytes → 9/10 01:00, 9596484 bytes)
+- 再起動後: pid=25332 active / `*:9443` LISTEN /
+  `curl -sk https://127.0.0.1:9443/v1/health` → `{"agent_version":"0.1.0","hostname":"lrm-mcp-agent","status":"ok"}`
+- 判定: A-1 (4○全合格) / A-4 (到達○)。A-3導入は不要 (稼働中+最新化済み)
+- 次工程: MCP Server側の node登録 (`https://<acemagic01>:9443`) + firewall 9443許可 +
+  `verify_env.py --network` の「Agent到達性」PASS確認
+
 ---
 
 ## B. 本番MCP Server導入サーバー
