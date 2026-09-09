@@ -26,6 +26,30 @@
 - ネットワーク: MCP Server からの HTTPS(8443) 到達が可能なこと
 - 時間同期: chrony / systemd-timesyncd で NTP 同期（監査ログ時刻の正確性）
 
+#### A-1. 確認手順（要件ごとに合否判定・詳細は A-4）
+
+```bash
+# [A] 要件1: OS が推奨範囲内か
+lsb_release -a 2>/dev/null || cat /etc/os-release
+# 期待: Ubuntu 22.04/24.04 または Rocky 9。合否: ○=範囲内 / ×=範囲外(要相談)
+
+# [A] 要件2: root または sudo 可能か
+id -u   # 期待: 0 (root 直実行)
+sudo -n true && echo "sudo-ok" || echo "sudo-ng (要パスワード or 未付与)"
+# 期待: root 直実行 or sudo-ok。合否: ○=いずれか / ×=どちらも不可
+
+# [A] 要件3: 自ホストで 8443/tcp が listen 可能か (Agent導入前は「空き」確認)
+ss -tlnp | grep 8443 || echo "8443-free (導入前は正常)"
+# 期待: 導入前=空き、導入後=LISTEN。合否: ○=他プロセスと競合なし
+
+# [A] 要件4: NTP 同期済みか (監査ログ時刻の正確性)
+timedatectl show | grep NTPSynchronized
+chronyc tracking 2>/dev/null | grep -E "Leap status|System time" || systemctl is-active chrony* systemd-timesyncd* --no-pager
+# 期待: NTPSynchronized=yes / Leap status: Normal。合否: ○=同期済み / ×=未同期(要NTP設定)
+```
+
+> 判定が1つでも × の場合は A-4 / F-2 に記録し、先に是正してから導入 (A-3) へ進む。
+
 ### A-2. MSTeamsで提供してほしい情報（事前準備チケットのコメント欄へ）
 | 項目 | 例 |
 |------|-----|
@@ -34,6 +58,36 @@
 | OS・バージョン | Ubuntu 24.04 LTS |
 | 到達経路 | Private NW 固定 IP（VPN 非経由を推奨） |
 | SSH 可否 | 検証実施者へ sudoer 提供 or root 提供（※推奨: 専用ユーザー + sudo） |
+
+#### A-2. 確認手順（提供情報の受領・突合チェック）
+
+```bash
+# [V] 1. 受領チェック (MSTeams/チケットの申告を転記・欠落確認)
+# 必須5点: ホスト名 / IP-FQDN / OS / 到達経路 / SSH可否
+# 期待: 5点そろっていること。欠落があれば提供者へ差し戻し (×=導入作業に入らない)
+
+# [V] 2. SSH 接続の実測 (検証実施者の端末から)
+ssh <user>@<agent-ip-or-fqdn> "hostname -f; id -u; sudo -n true && echo sudo-ok"
+# 期待: ホスト名が申告と一致、uid=0 or sudo-ok。合否: ○=一致+権限あり / ×=不一致or権限なし
+
+# [V] 3. OS 申告との突合 (SSH先で)
+ssh <user>@<agent-ip-or-fqdn> "lsb_release -a 2>/dev/null || cat /etc/os-release"
+# 期待: 申告OSと一致し、A-1 要件範囲内であること
+
+# [V] 4. 到達経路の実測 (MCP Serverホストから。VPN/Private NW の確認)
+# [M] で実行:
+nc -zv <agent-ip-or-fqdn> 8443 || echo "not-yet (Agent導入前は不通で正常)"
+ping -c 3 <agent-ip-or-fqdn>
+# 期待: 導入前=ping疎通のみ (8443不通は正常)、導入後=8443疎通。申告経路(VPN/Private)と矛盾がないこと
+```
+
+Plane貼付テンプレ (A-2 受領確認):
+```
+[A-2] 受領5点: ホスト名=<○/×> IP-FQDN=<○/×> OS=<○/×> 到達経路=<○/×> SSH=<○/×>
+[A-2] SSH実測: hostname=<一致/不一致> 権限=<uid/sudo-ok/ng>
+[A-2] OS突合: 申告=<...> 実測=<...> 要件範囲=<○/×>
+[A-2] 経路実測: ping=<ok/ng> 8443=<導入前不通で正常/導入後ok> 経路矛盾=<有/無>
+```
 
 ### A-3. 検証時に投入するもの（Cline/検証者が実施）
 ```bash
