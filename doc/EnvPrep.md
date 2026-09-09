@@ -23,7 +23,9 @@
 ### A-1. サーバー要件
 - OS: **Ubuntu 22.04 LTS / 24.04 LTS** または **Rocky Linux 9**（推奨）
 - 必要な権限: root（専用ユーザー作成、systemd unit 配置、証明書配置）
-- ネットワーク: MCP Server からの HTTPS(8443) 到達が可能なこと
+- ネットワーク: MCP Server からの HTTPS(9443) 到達が可能なこと
+  - ※ 既定は 8443 だが、本件環境では docker-proxy が 8443 を占有中のため **9443** を使用する
+    (Agent `agent.listen: ":9443"` + MCP Server `servers[].url: https://<host>:9443` + firewall の3点連動)
 - 時間同期: chrony / systemd-timesyncd で NTP 同期（監査ログ時刻の正確性）
 
 #### A-1. 確認手順（要件ごとに合否判定・詳細は A-4）
@@ -38,9 +40,11 @@ id -u   # 期待: 0 (root 直実行)
 sudo -n true && echo "sudo-ok" || echo "sudo-ng (要パスワード or 未付与)"
 # 期待: root 直実行 or sudo-ok。合否: ○=いずれか / ×=どちらも不可
 
-# [A] 要件3: 自ホストで 8443/tcp が listen 可能か (Agent導入前は「空き」確認)
-ss -tlnp | grep 8443 || echo "8443-free (導入前は正常)"
-# 期待: 導入前=空き、導入後=LISTEN。合否: ○=他プロセスと競合なし
+# [A] 要件3: 自ホストで 9443/tcp が listen 可能か (Agent導入前は「空き」確認)
+# ※ 既定8443は本件環境でdocker-proxyが占有中のため 9443 を使用する
+ss -tlnp | grep 9443 || echo "9443-free (導入前は正常)"
+ss -tlnp | grep 8443 || echo "8443-note (docker-proxy占有を確認済み)"
+# 期待: 導入前=9443空き、導入後=9443 LISTEN。合否: ○=9443に競合なし
 
 # [A] 要件4: NTP 同期済みか (監査ログ時刻の正確性)
 timedatectl show | grep NTPSynchronized
@@ -75,10 +79,11 @@ ssh <user>@<agent-ip-or-fqdn> "lsb_release -a 2>/dev/null || cat /etc/os-release
 # 期待: 申告OSと一致し、A-1 要件範囲内であること
 
 # [V] 4. 到達経路の実測 (MCP Serverホストから。VPN/Private NW の確認)
+# ※ Agentポートは 9443 (既定8443はdocker-proxy占有のため変更)
 # [M] で実行:
-nc -zv <agent-ip-or-fqdn> 8443 || echo "not-yet (Agent導入前は不通で正常)"
+nc -zv <agent-ip-or-fqdn> 9443 || echo "not-yet (Agent導入前は不通で正常)"
 ping -c 3 <agent-ip-or-fqdn>
-# 期待: 導入前=ping疎通のみ (8443不通は正常)、導入後=8443疎通。申告経路(VPN/Private)と矛盾がないこと
+# 期待: 導入前=ping疎通のみ (9443不通は正常)、導入後=9443疎通。申告経路(VPN/Private)と矛盾がないこと
 ```
 
 Plane貼付テンプレ (A-2 受領確認):
@@ -86,13 +91,21 @@ Plane貼付テンプレ (A-2 受領確認):
 [A-2] 受領5点: ホスト名=<○/×> IP-FQDN=<○/×> OS=<○/×> 到達経路=<○/×> SSH=<○/×>
 [A-2] SSH実測: hostname=<一致/不一致> 権限=<uid/sudo-ok/ng>
 [A-2] OS突合: 申告=<...> 実測=<...> 要件範囲=<○/×>
-[A-2] 経路実測: ping=<ok/ng> 8443=<導入前不通で正常/導入後ok> 経路矛盾=<有/無>
+[A-2] 経路実測: ping=<ok/ng> 9443=<導入前不通で正常/導入後ok> 経路矛盾=<有/無>
 ```
 
 ### A-3. 検証時に投入するもの（Cline/検証者が実施）
+
+> ※ Agentポートは **9443** (既定8443はdocker-proxy占有のため変更)。以下3点を連動させる:
+> ① Agent `agent.listen: ":9443"` ② MCP Server `servers[].url: https://<host>:9443` ③ firewall 9443許可
 ```bash
 # ビルド（ローカル or 検証端末）
 cd lrm-mcp-agent && make build
+
+# Agent listen変更 (config.yml の agent.listen を ":9443" に)
+# /etc/lrm-mcp-agent/config.yml (導入後に編集):
+#   agent:
+#     listen: ":9443"
 
 # 導入（root で実行。専用ユーザー/group作成、systemd unit、ディレクトリ権限）
 sudo bash scripts/setup.sh
@@ -100,10 +113,12 @@ sudo bash scripts/setup.sh
 # トークン設定（readonly / operator 各トークンの SHA-256 ハッシュを config に反映）
 sudo bash scripts/setup-tokens.sh /etc/lrm-mcp-agent/config.yml
 
-# 起動・確認
+# 起動・確認 (9443)
 sudo systemctl enable --now lrm-mcp-agent
 systemctl is-active lrm-mcp-agent
-curl -sk https://127.0.0.1:8443/v1/health; echo
+ss -tlnp | grep 9443
+curl -sk https://127.0.0.1:9443/v1/health; echo
+# 期待: 200応答 ({"status":"ok"} 等)
 ```
 
 ### A-4. 確認手順（Agentホスト上で実施・結果をPlaneに貼付）
@@ -139,14 +154,14 @@ chronyc tracking 2>/dev/null | head -n 8 || systemctl status chrony* systemd-tim
 ```
 
 ```bash
-# [A] 5. Agent 導入後の到達性 (導入実施後に確認)
-ss -tlnp | grep 8443
-curl -sk https://127.0.0.1:8443/v1/health; echo
-# 期待: {"status":"ok"} 等の 200 応答 (Agent README §Quick Start)
+# [A] 5. Agent 導入後の到達性 (導入実施後に確認。ポート9443)
+ss -tlnp | grep 9443
+curl -sk https://127.0.0.1:9443/v1/health; echo
+# 期待: {"status":"ok"} 等の 200 応答 (Agent README §Quick Start。ポートは9443に読替)
 
-# [M] 6. MCP Serverホストからの到達性 (firewall越し)
-curl -sk https://<agent-fqdn-or-ip>:8443/v1/health; echo
-nc -zv <agent-fqdn-or-ip> 8443
+# [M] 6. MCP Serverホストからの到達性 (firewall越し。ポート9443)
+curl -sk https://<agent-fqdn-or-ip>:9443/v1/health; echo
+nc -zv <agent-fqdn-or-ip> 9443
 # 期待: 200 応答 / succeeded。失敗時は D節 (firewall) を見直す
 
 # [V] 7. プリフライト (MCP Server側から)
@@ -352,8 +367,8 @@ Plane貼付テンプレ (C):
 sudo ufw allow from 10.0.10.0/24 to any port 8080 proto tcp   # console: 管理NWのみ
 sudo ufw allow from 10.0.20.0/24 to any port 8090 proto tcp   # MCP HTTP: 利用者NWのみ
 sudo ufw default deny incoming
-# Agent ホスト
-sudo ufw allow from 10.0.0.20 to any port 8443 proto tcp      # Agent: MCP Serverのみ
+# Agent ホスト (ポート9443。既定8443はdocker-proxy占有のため変更)
+sudo ufw allow from 10.0.0.20 to any port 9443 proto tcp      # Agent: MCP Serverのみ
 sudo ufw default deny incoming
 ```
 
@@ -368,15 +383,15 @@ ip -brief addr show
 sudo ufw status numbered 2>/dev/null
 sudo firewall-cmd --list-all 2>/dev/null
 sudo iptables -L -n --line-numbers 2>/dev/null | head -n 40
-# 期待: 管理NW→8080、利用者NW→8090、MCP Server→Agent:8443 のみ許可
+# 期待: 管理NW→8080、利用者NW→8090、MCP Server→Agent:9443 のみ許可
 
 # [B/A] 3. listen アドレス (0.0.0.0 露出の有無)
-ss -tlnp | grep -E ":(8080|8090|8443)"
-# 期待: console=127.0.0.1:8080 (管理NW公開はproxy経由)、mcp=利用者NW向け、agent=8443
+ss -tlnp | grep -E ":(8080|8090|9443)"
+# 期待: console=127.0.0.1:8080 (管理NW公開はproxy経由)、mcp=利用者NW向け、agent=9443
 
-# [M→A] 4. MCP Server → Agent の疎通
-nc -zv <agent-ip> 8443
-curl -sk -o /dev/null -w "%{http_code}\n" https://<agent-ip>:8443/v1/health
+# [M→A] 4. MCP Server → Agent の疎通 (ポート9443)
+nc -zv <agent-ip> 9443
+curl -sk -o /dev/null -w "%{http_code}\n" https://<agent-ip>:9443/v1/health
 # 期待: open / 200 (401/403 も「到達OK」として扱う。verify_env.py と同じ判定)
 
 # [管理端末→M] 5. 管理NW → console の疎通
