@@ -3,3 +3,6 @@ nul
 .venv
 .vscode
 *.exe
+__pycache__/
+*.pyc
+*.pyo

@@ -440,6 +440,38 @@ agent:
    - MCP トークンは AES-256-GCM で暗号化して DB に保存 (§3.1)
    - 暗号化鍵は `LRM_TOKEN_ENCRYPTION_KEY` 環境変数 (Vault から注入推奨)
 
+### 6.6 生トークン暗号化 (AES-256-GCM)
+
+MCPトークンとAgent credentialの生値をSQLiteに平文で保存しない。
+`app/secretbox.py` が AES-256-GCM による保存時暗号化を提供する。
+
+```yaml
+# 暗号化キー解決順:
+# 1. 環境変数 LRM_TOKEN_ENCRYPTION_KEY (32バイトのhex/base64)
+# 2. キーファイル <data_dir>/token_encryption.key (自動生成、0600)
+```
+
+- 保存形式: `enc.v1.<nonce base64url>.<ciphertext base64url>`
+- SHA-256ハッシュ (`token_hash`) は暗号化の影響を受けない (照合可能)
+- トークン発行時は生トークンを1回のみ返し、2回目は取得不可
+
+### 6.7 レート制限高度化 (トークンレベル制限)
+
+MCP Serverのレート制限は **IP+トークン複合キー** で計上される。
+
+```yaml
+# config.yml
+console:
+  rate_limit_per_minute: 60      # 基本値 (トークン別設定がない場合)
+  rate_limit_burst: 10
+  rate_limit_write_per_minute: 30  # 操作系 (デフォルト: 基本値の半値)
+  rate_limit_token_per_minute: 0   # トークン別 (0=基本値へフォールバック)
+```
+
+- BearerトークンはSHA-256ハッシュに変換してキー化 (生値はメモリ上に残らない)
+- 操作系 (`execute_command`, `restart_service` 等) は読み取りと独立したバケットで制限
+- 超過時: `429 Too Many Requests` (Retry-After: 60)
+
 ---
 
 ## 7. 監視

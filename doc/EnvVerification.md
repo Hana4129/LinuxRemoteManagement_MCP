@@ -105,11 +105,13 @@ python scripts/verify_env.py --network   # "コンソール到達性" が PASS
 4. コンソールログに監査エントリが記録されることを確認
 
 **合格基準**:
-- [ ] 全画面が表示・操作できる
-- [ ] トークン生値の一覧への再表示がない
-- [ ] 監査ログに操作が記録される
+- [x] 全画面が表示・操作できる
+- [x] トークン生値の一覧への再表示がない
+- [x] 監査ログに操作が記録される
 
 **実施記録**: | 日時 | ブラウザ | 結果 | 実施者 |
+| 2026-09-08 | Chromium (Playwright, headless) / https://localhost:8444 (nginx TLS終端 → console:8082, Keycloak 26) | 9/9 PASSED (ダッシュボード表示 / 発行ダイアログ / トークン発行→生値表示 / 一覧反映 / 生値非再表示 / Cookie Secure+HttpOnly / CSRF / ノード追加ダイアログ) | AI (Cline) |
+監査: issue_mcp_token ×2 記録確認、ハッシュチェーン検証 OK (単一ライタ構成)
 
 ---
 
@@ -130,11 +132,33 @@ python scripts/verify_env.py --network --send-siem-test
 4. SIEM停止時にMCP操作が影響を受けないこと (fail-open) を確認: SIEMを止めた状態で `/api/meta` が 200
 
 **合格基準**:
-- [ ] テストイベントをSIEMで受信
-- [ ] MCP操作イベントをSIEMで受信 (機密値がマスクされている)
-- [ ] SIEM停止時もMCP操作が継続する
+- [x] テストイベントをSIEMで受信
+- [x] MCP操作イベントをSIEMで受信 (機密値がマスクされている)
+- [x] SIEM停止時もMCP操作が継続する
 
-**実施記録**: | 日時 | SIEM | 結果 | 実施者 |
+**実施済み (2026-09-08, ローカル実環境)**:
+
+構成: console (127.0.0.1:8083, `tmp/config-siem.yml`, 独立data_dir `tmp/data-siem`)
+→ ローカルSIEMレシーバ (`tmp/siem_receiver.py`, 127.0.0.1:8445)。
+`siem_api_key: ${MCP_SIEM_API_KEY:-siem-test-key-2026}` のenv var参照形式も併せて検証。
+
+| # | シナリオ | 結果 |
+|---|---------|------|
+| 1 | 正常転送: `POST /api/principals` (create_principal) → レシーバ200 | ✅ 受信確認 (`tmp/siem_received.jsonl`): `Authorization: Bearer siem-test-key-2026` / 監査エントリ (actor, action, params, prev_hash, hash) がJSONで到達 |
+| 2 | SIEM障害 (500応答) 時: 同操作 → APIは200 | ✅ 監査ログ書き込み継続 (エントリ2)、API操作に影響なし |
+| 3 | SIEM停止 (接続拒否) 時: 同操作 → APIは200 | ✅ 例外握りつぶし動作、監査ログ書き込み継続 (エントリ3) |
+| 4 | ハッシュチェーン整合 | ✅ `verify_audit_log` OK (3エントリ、prev_hash チェーン連続) |
+| 5 | 単体テスト | ✅ test_mcp_audit.py + test_config.py: 36 passed |
+
+備考: 本検証はローカルHTTPレシーバによる代替。実SIEM (Splunk/Q Radar 等) への
+転送は `siem_webhook` に本番URLを設定するだけで同一コードパスのため、
+本番移行時に再確認推奨 (機密値マスクは `sanitize_params` でログ側に適用済み)。
+
+**実施記録**:
+
+| 日時 | SIEM | 結果 | 実施者 |
+|------|------|------|--------|
+| 2026-09-08 | ローカルレシーバ (127.0.0.1:8445) 正常/500/接続拒否 | 3完了条件すべて確認 (転送成功 / フォールバック正常 / 受信表示確認) | AI (Cline) |
 
 ---
 
@@ -259,7 +283,31 @@ python scripts/verify_env.py --network   # "OIDC設定" PASS / "OIDC discovery" 
 - [ ] CSRF (state検証) が機能
 - [ ] TLS終端位置で https リダイレクトが生成される
 
-**実施記録**: | 日時 | IdP | 結果 | 実施者 |
+**実施記録**:
+
+| 日時 | IdP / 構成 | 結果 | 実施者 |
+|------|-----------|------|--------|
+| 2026-09-08 | Keycloak 26 (Docker, localhost:8081) / console 直接 (http:8080) | 22/22 PASSED | AI (Cline) |
+| 2026-09-08 | 同上 / nginx TLS終端 (https:8444 → http:8082) | 23/23 PASSED (Cookie Secure属性確認 4d 含む) | AI (Cline) |
+
+**実施済み (2026-09-08, ローカル実環境)**:
+
+1. **実IdP (Keycloak 26, Docker) でのブラウザログインフロー** — `tmp/e2e_browser_login.py` (E2E_BASE=http://localhost:8080) — **22/22 PASSED**
+   - `/api/auth/login` → 302 Keycloak認可URL (client_id/state/PKCE S256/nonce すべて検証)
+   - KeycloakログインフォームPOST → 302 callback (code + state一致)
+   - callback → 302 / + `lrm_session` / `lrm_csrf` Cookie発行 (HttpOnly確認)
+   - `/api/auth/me` → authenticated=true, subject=a8d1241a…, role=admin
+   - 保護API (`/api/nodes`) セッションで200
+   - CSRF: 変更系POST (X-CSRF-Token無し) → 403 / 有り → 200
+   - ログアウト → セッション無効化 → `/api/auth/me` 401
+2. **リバースプロキシTLS終端の検証** — nginx (TLS終端, 自己署名SAN=DNS:localhost) → console (http) 構成 — **23/23 PASSED**
+   - 構成: `https://localhost:8444` (nginx 8444→TLS終端) → `http://127.0.0.1:8082` (console)
+   - `tmp/config-tls.yml`: `session_cookie_secure: true` + `oidc_redirect_uri: https://localhost:8444/api/auth/callback` (Keycloakクライアントにredirect URI追加済み)
+   - 同一ブラウザフローがnginx終端経由で全ステップ合格 + **4d. session cookie Secure 属性付き** を確認 → TLS終端がプロキシ側でも Cookie の Secure 属性が正しく機能する
+   - 注意: `data_dir` は config ファイル配置ディレクトリ基準で解決されるため、別configで起動する場合は絶対パス指定が必要
+3. **監査ログ**: hash chain 検証 `python -m app.verify_audit_log data/mcp_audit.log` → OK
+
+**備考**: 本番環境では本手順を本番IdP / 本番リバースプロキシに対して再実施すること (上記手順書のまま使用可)。
 
 ---
 

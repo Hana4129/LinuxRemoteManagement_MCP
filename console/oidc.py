@@ -9,6 +9,8 @@ from typing import Any
 import httpx
 import jwt
 
+from app.config import _is_loopback_url
+
 
 class OidcError(Exception):
     """Raised when an OIDC token cannot be validated."""
@@ -18,8 +20,8 @@ class OidcValidator:
     def __init__(self, issuer: str, audience: str, jwks_url: str, cache_seconds: int = 300):
         if not issuer or not audience or not jwks_url:
             raise ValueError("OIDCには issuer, audience, jwks_url が必要です")
-        if not jwks_url.startswith("https://"):
-            raise ValueError("oidc_jwks_url は https:// である必要があります")
+        if not jwks_url.startswith("https://") and not _is_loopback_url(jwks_url):
+            raise ValueError("oidc_jwks_url は https:// である必要があります (localhost 等のループバックは除く)")
 
         self.issuer = issuer
         self.audience = audience

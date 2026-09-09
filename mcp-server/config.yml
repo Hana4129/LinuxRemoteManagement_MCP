@@ -20,6 +20,15 @@ console:
   data_dir: ./data         # tokens.db (SQLite) 保存先
   auth_required: true      # 本番では管理コンソールの認証を必須にする
   auth_mode: basic         # basic または oidc
+  # OIDC設定 (本番IdP例。ローカルKeycloakで試す場合は環境変数で上書き)
+  # oidc_issuer: ${LINUX_MCP_OIDC_ISSUER:-https://idp.example.internal/realms/company}
+  # oidc_audience: ${LINUX_MCP_OIDC_AUDIENCE:-linux-mcp-console}
+  # oidc_jwks_url: ${LINUX_MCP_OIDC_JWKS_URL:-https://idp.example.internal/realms/company/protocol/openid-connect/certs}
+  # oidc_client_id: ${LINUX_MCP_OIDC_CLIENT_ID:-linux-mcp-console}
+  # oidc_client_secret: ${LINUX_MCP_OIDC_CLIENT_SECRET:-}
+  # oidc_redirect_uri: ${LINUX_MCP_OIDC_REDIRECT_URI:-https://console.example.internal/api/auth/callback}
+  # oidc_browser_login: false
+  # session_cookie_secure: true  # http の IdP/コールバックで試す場合のみ false (ループバックのみ許可)
   # username/password : 環境変数 LINUX_MCP_CONSOLE_USER / _PASS で設定 (fallback あり)
   # 本番では ${ENV_VAR} 参照を推奨:  password: ${LINUX_MCP_CONSOLE_PASS}
   # username: admin

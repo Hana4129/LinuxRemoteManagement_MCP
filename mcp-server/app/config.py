@@ -15,6 +15,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import yaml
 
@@ -430,18 +431,31 @@ def load_config(path: str | Path | None = None) -> AppConfig:
             raise ValueError("OIDCモードには oidc_audience の設定が必要です")
         if not console.oidc_jwks_url:
             raise ValueError("OIDCモードには oidc_jwks_url の設定が必要です")
-        if not console.oidc_jwks_url.startswith("https://"):
-            raise ValueError("oidc_jwks_url は https:// である必要があります")
+        if not console.oidc_jwks_url.startswith("https://") and not _is_loopback_url(console.oidc_jwks_url):
+            raise ValueError("oidc_jwks_url は https:// である必要があります (localhost 等のループバックは除く)")
         if console.oidc_browser_login:
             if not console.oidc_client_id:
                 raise ValueError("oidc_browser_login には oidc_client_id の設定が必要です")
             if not console.oidc_redirect_uri:
                 raise ValueError("oidc_browser_login には oidc_redirect_uri の設定が必要です")
-            if not console.oidc_redirect_uri.startswith("https://"):
-                raise ValueError("oidc_redirect_uri は https:// である必要があります")
+            if not console.oidc_redirect_uri.startswith("https://") and not _is_loopback_url(console.oidc_redirect_uri):
+                raise ValueError("oidc_redirect_uri は https:// である必要があります (localhost 等のループバックは除く)")
             if console.session_cookie_secure and not console.oidc_redirect_uri.startswith("https://"):
                 raise ValueError(
                     "oidc_redirect_uri が http:// の場合は session_cookie_secure=false を明示してください"
                 )
 
     return AppConfig(config_path=config_path, servers=tuple(servers), agent=agent, console=console, mcp=mcp, raw=raw)
+
+
+def _is_loopback_url(url: str) -> bool:
+    """URLのホストがループバック (localhost / 127.0.0.1 / ::1) かどうか。
+
+    ローカル開発で http の IdP (Keycloak等) やコールバックURLを使えるようにする
+    ための例外判定。外部ホストに対しては引き続き https:// を強制する。
+    """
+    try:
+        host = (urlsplit(url).hostname or "").lower()
+    except ValueError:
+        return False
+    return host in {"localhost", "127.0.0.1", "::1"} or host.endswith(".localhost")

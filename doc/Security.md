@@ -137,10 +137,10 @@ SIEM
 | Rate Limit (Agent) | - | ✅ | ✅ | ✅ 実装済み |
 | Rate Limit (MCP Server) | - | ✅ | ✅ | ✅ 実装済み |
 | Human Approval | - | ✅ | ✅ | ✅ 実装済み |
-| Policy Engine | - | - | ✅ | ⚠️ Agent側scope/policyのみ。ユーザー単位は未実装 |
+| Policy Engine | - | - | ✅ | ✅ Agent側scope/policy + MCP Server側principal単位権限管理 |
 | mTLS | - | - | ✅ | ✅ 実装済み |
 | SIEM | - | - | ✅ | ✅ 実装済み |
-| Token Rotation | - | - | ✅ | ⚠️ MCP Server内の管理。Agent反映は未実装 |
+| Token Rotation | - | - | ✅ | ✅ MCP Server管理 + Agent反映済み（失効同期含む） |
 | Immutable Log | - | - | ✅ | ✅ 実装済み |
 
 ---

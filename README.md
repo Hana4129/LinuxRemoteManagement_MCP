@@ -167,11 +167,42 @@ servers:
 
 ## セキュリティ
 
-- トークンは CSPRNG (64バイト) で生成、SHA256 ハッシュで保存
+### トークン管理
+- トークンは CSPRNG (64バイト) で生成
+- 生トークンは **AES-256-GCM** で暗号化して DB に保存 (`app/secretbox.py`)
+- トークン発行時は生トークンを1回のみ返し、2回目は取得不可
 - `data/tokens.db` はファイルパーミッション 0600
+
+### 認証・認可
 - Agent への通信は **Bearer Token** 認証 (constant-time 比較)
-- 本番では Secret Store (Vault 等) との連携への置き換えを推奨
+- OIDC ブラウザログイン (Authorization Code + PKCE) 対応
+- mTLS (双方向認証) 対応 - クライアント証明書検証
+- Policy Engine (スコープベース認可) - readonly/operator
+
+### レート制限
+- **IP+トークン複合キー** で計上 (同一NAT配下の複数クライアントを分離)
+- 操作系は読み取りと独立したバケットで制限
+- 超過時: 429 Too Many Requests
+
+### 監査ログ
+- 構造化 JSONL、0600 パーミッション
+- **ハッシュチェーン** による改ざん防止 (Agent側と同方式)
+- SIEM  webhook 転送 (CEF/LEEF/JSON 形式対応)
+- ローテーション (サイズベース、世代管理、gzip圧縮)
+
+### 設定ファイルの機密情報保護
+- シークレットは環境変数参照 (`${ENV_VAR}`) 形式
+- `config.yml` は Git 管理可能 (シークレットは含まれない)
+- `save()` 時に参照を保持 (平文が書き出されない)
+
+### 運用スクリプト
+- systemd サービス化 (linux-mcp-console, linux-mcp-http, lrm-mcp-agent)
+- ファイアウォール設定 (UFW/iptables対応)
+- バックアップ・モニタリング・ログローテーション
+
+### ネットワーク
 - 社内ネットワークでのみアクセス可能なホスト (127.0.0.1) で listen
+- 本番では Secret Store (Vault 等) との連携を推奨
 
 ## ライセンス
 

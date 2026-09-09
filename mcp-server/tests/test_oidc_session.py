@@ -333,3 +333,52 @@ def test_browser_login_config_validation(tmp_path):
     config = load_config(ok)
     assert config.console.oidc_browser_login is True
     assert config.console.session_lifetime_minutes == 480
+
+
+def test_browser_login_loopback_http_allowed(tmp_path):
+    """localhost / 127.0.0.1 向けの http URL はローカル開発用に許可される。"""
+    servers = [{"id": "dev", "name": "Dev", "url": "http://127.0.0.1:1", "env": "development"}]
+    base_console = {
+        "auth_mode": "oidc",
+        "oidc_issuer": "http://localhost:8081/realms/linux-mcp-realm",
+        "oidc_audience": "linux-mcp-console",
+        "oidc_jwks_url": "http://localhost:8081/realms/linux-mcp-realm/protocol/openid-connect/certs",
+        "oidc_browser_login": True,
+        "oidc_client_id": "linux-mcp-console",
+        "oidc_redirect_uri": "http://localhost:8080/api/auth/callback",
+        # http の redirect_uri では secure cookie を使えないため明示的に false が必要
+        "session_cookie_secure": False,
+    }
+
+    # loopback http は許可
+    ok = tmp_path / "loopback_ok.yml"
+    ok.write_text(yaml.safe_dump({"servers": servers, "console": dict(base_console)}), encoding="utf-8")
+    config = load_config(ok)
+    assert config.console.oidc_jwks_url.startswith("http://localhost")
+
+    # 127.0.0.1 も許可
+    ok2 = tmp_path / "loopback_ok2.yml"
+    ok2.write_text(
+        yaml.safe_dump(
+            {
+                "servers": servers,
+                "console": dict(base_console, oidc_redirect_uri="http://127.0.0.1:8080/callback"),
+            }
+        ),
+        encoding="utf-8",
+    )
+    load_config(ok2)
+
+    # 非loopbackホストの http は引き続き拒否
+    ng = tmp_path / "loopback_ng.yml"
+    ng.write_text(
+        yaml.safe_dump(
+            {
+                "servers": servers,
+                "console": dict(base_console, oidc_jwks_url="http://idp.internal/keys"),
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError):
+        load_config(ng)
