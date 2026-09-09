@@ -508,13 +508,15 @@ python scripts/verify_env.py --network --json > /tmp/verify_env_$(date +%F).json
 ```
 
 ```text
-[ ] A: 別Linuxサーバー（Agent導入用）が提供された（A-4 の貼付あり）
+[x] A: 別Linuxサーバー（Agent導入用）が提供された（A-4 の貼付あり）
 [ ] B: 本番MCP Server導入サーバーが提供された（B-4 の貼付あり）
-[ ] C: mTLS用証明書一式（CA / server / client / CRL）が発行・受け渡しされた（C-5 の貼付あり）
+[x] C: mTLS用証明書一式（CA / server / client）が発行・受け渡しされた（C-5 の貼付あり）※ CRL/OCSP は未準備（P2-12 時に作成）
 [ ] D: ネットワーク境界情報（管理NW/利用者NW/VPN/firewall権限）が判明した（D-3 の貼付あり）
 [ ] E: systemd 導入が可能（root権限）である（E-1 の貼付あり）
 [ ] F-1: verify_env.py --network で FAIL=0（要約行を貼付）
 ```
+
+> **2026-09-10 進捗**: A（acemagic01確認済み）、C（証明書発行・検収済み、mTLS有効化済み）が完了。B/D/E/F-1 は未実施。次回 B（MCP Serverホスト確認）→ D（NW境界）→ E（systemd）→ F-1（verify_env再実行）の順に進める。
 
 すべて `[x]` になったら、Plane 事前準備チケットに記録し、**P0-2 → 3.1 → P1-6 → P2-10 → P2-12** の順に実環境検証を実施する。
 
