@@ -325,20 +325,29 @@ def check_operational_scripts(config: Any, report: Report) -> None:
 def check_agent_health(config: Any, report: Report) -> None:
     import httpx
 
+    from app.config import _build_agent_ssl_context
+
     agent = config.agent
-    cert = None
-    if getattr(agent, "client_cert", "") and getattr(agent, "client_key", ""):
-        cert = (agent.client_cert, agent.client_key)
+    client_cert = getattr(agent, "client_cert", "") or ""
+    client_key = getattr(agent, "client_key", "") or ""
+    has_mtls = bool(client_cert and client_key)
+    # httpx 0.28 以降は verify=<CAパス> + cert=tuple でクライアント証明書が
+    # 送信されないため、明示的な SSLContext を構築する
+    tls_ctx = _build_agent_ssl_context(
+        agent.tls_verify,
+        client_cert=client_cert,
+        client_key=client_key,
+    )
     for server in config.servers:
         url = f"{server.url}/v1/health"
         try:
-            with httpx.Client(timeout=min(agent.timeout_seconds, 8.0), verify=agent.tls_verify, cert=cert) as client:
+            with httpx.Client(timeout=min(agent.timeout_seconds, 8.0), verify=tls_ctx) as client:
                 resp = client.get(url, headers={"User-Agent": agent.user_agent})
         except Exception as exc:  # noqa: BLE001
             report.add("P0-2/P2-12", f"Agent到達性 [{server.id}]", FAIL, f"{url} に接続不可: {str(exc)[:120]}", "Agent起動・URL・firewallを確認 (3.1)")
             continue
         if resp.status_code == 200:
-            mtls_note = "mTLS有効" if cert else "mTLS無し (クライアント証明書未設定)"
+            mtls_note = "mTLS有効" if has_mtls else "mTLS無し (クライアント証明書未設定)"
             report.add("P0-2/P2-12", f"Agent到達性 [{server.id}]", PASS, f"HTTP 200 ({mtls_note})")
         elif resp.status_code in (401, 403):
             report.add("P0-2/P2-12", f"Agent到達性 [{server.id}]", PASS, f"HTTP {resp.status_code} (認証必須だが到達性OK)")
@@ -382,7 +391,13 @@ def check_console_reachable(config: Any, report: Report) -> None:
     except Exception as exc:  # noqa: BLE001
         report.add("P1-4", "コンソール到達性", WARN, f"{url} に接続不可: {str(exc)[:120]}", "管理コンソール (python -m app) を起動してから実ブラウザ確認 (P1-4)")
         return
-    report.add("P1-4", "コンソール到達性", PASS if resp.status_code == 200 else WARN, f"HTTP {resp.status_code}", "UI表示は実ブラウザで確認 (doc §P1-4)")
+    if resp.status_code == 200:
+        report.add("P1-4", "コンソール到達性", PASS, "HTTP 200")
+    elif resp.status_code in (401, 403):
+        # 認証必須でも到達性は確認できた (Agent到達性と同じ判定)
+        report.add("P1-4", "コンソール到達性", PASS, f"HTTP {resp.status_code} (認証必須だが到達性OK)")
+    else:
+        report.add("P1-4", "コンソール到達性", WARN, f"HTTP {resp.status_code}", "UI表示は実ブラウザで確認 (doc §P1-4)")
 
 
 def check_siem_test_send(config: Any, report: Report) -> None:

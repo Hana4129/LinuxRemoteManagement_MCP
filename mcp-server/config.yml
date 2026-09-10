@@ -56,32 +56,29 @@ agent:
   client_key: ./certs/mcp-client.key
 
 # ---- 管理対象ノード ----
+# 実環境 (2026-09-10 現在): Agent稼働ノードは acemagic01 (192.168.10.114:9443) のみ。
+# モックAgent (dev-web-01/dev-db-01) は開発時のみ config.dev.yml で使用する。
 servers:
-  - id: dev-web-01
-    name: "開発 Web #01"
-    url: http://127.0.0.1:8443   # 開発用モックAgent (tools/mock_agent.py)
-    env: development
-    description: モックAgentでの動作確認用
-
-  - id: dev-db-01
-    name: "開発 DB #01"
-    url: http://127.0.0.1:8444
-    env: development
-    description: モックAgentでの動作確認用
-
-  - id: ubuntu-server1
-    name: "Ubuntu Server #01"
-    url: https://ubuntu-server1.local:9443
+  - id: acemagic01
+    name: "acemagic01 (Ubuntu 24.04)"
+    url: https://192.168.10.114:9443
     env: production
-    description: リモートUbuntuサーバー（Agent導入済み・token2設定）
+    description: 実環境検証用Agentホスト (mTLS有効・CA署名証明書)
 
-  - id: prod-web-01
-    name: "本番 Web #01"
-    url: https://prod-web-01.internal:8443
-    env: production
-    description: 本番Webサーバー（Agent導入済み想定）
-
-  - id: stg-batch-01
-    name: "検証 Batch #01"
-    url: https://stg-batch-01.internal:8443
-    env: staging
+  # --- 未導入ノード (導入時にコメント解除) ---
+  # - id: ubuntu-server1
+  #   name: "Ubuntu Server #01"
+  #   url: https://ubuntu-server1.local:9443
+  #   env: production
+  #   description: リモートUbuntuサーバー（Agent導入済み・token2設定）
+  #
+  # - id: prod-web-01
+  #   name: "本番 Web #01"
+  #   url: https://prod-web-01.internal:8443
+  #   env: production
+  #   description: 本番Webサーバー（Agent導入済み想定）
+  #
+  # - id: stg-batch-01
+  #   name: "検証 Batch #01"
+  #   url: https://stg-batch-01.internal:8443
+  #   env: staging

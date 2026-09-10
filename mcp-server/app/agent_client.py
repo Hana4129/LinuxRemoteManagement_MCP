@@ -6,13 +6,14 @@ Bearer Token 認証付きで HTTPS リクエストを送信する。
 
 from __future__ import annotations
 
+import ssl
 import time
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
 
-from .config import ServerConfig
+from .config import ServerConfig, _build_agent_ssl_context
 from .db import TokenStore
 from .auth import current_token
 
@@ -70,15 +71,18 @@ class AgentClient:
         self._config = config
         self._store = store
         # mTLS: client_cert/client_key が設定されていればクライアント証明書を提示する
+        # httpx 0.28 以降は verify=<CAパス> + cert=tuple の組み合わせでクライアント
+        # 証明書が送信されないため、明示的な SSLContext を構築して渡す
         client_cert = getattr(config.agent, "client_cert", "") or ""
         client_key = getattr(config.agent, "client_key", "") or ""
-        cert = None
-        if client_cert and client_key:
-            cert = (client_cert, client_key)
+        tls_ctx = _build_agent_ssl_context(
+            config.agent.tls_verify,
+            client_cert=client_cert,
+            client_key=client_key,
+        )
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(config.agent.timeout_seconds),
-            verify=config.agent.tls_verify,
-            cert=cert,
+            verify=tls_ctx,
             headers={"User-Agent": config.agent.user_agent, "Accept": "application/json"},
         )
 

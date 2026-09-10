@@ -1,0 +1,25 @@
+FROM python:3.10-slim
+
+WORKDIR /app
+
+# 依存関係インストール
+COPY mcp-server/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# アプリケーションコード COPY
+COPY mcp-server/app ./app
+COPY mcp-server/config.yml ./config.yml
+COPY console ./console
+
+# データディレクトリ作成
+RUN mkdir -p /app/data
+
+# 環境変数
+ENV PYTHONPATH=/app
+ENV MCP_CONFIG_FILE=/app/config.yml
+
+# 管理コンソールポート
+EXPOSE 8080
+
+# 起動コマンド
+CMD ["uvicorn", "console.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8080"]

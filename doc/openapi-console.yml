@@ -1,0 +1,441 @@
+openapi: 3.0.3
+info:
+  title: Linux Remote Management — Management Console API
+  description: |
+    管理コンソールが提供する HTTP API。
+    MCP Server の管理（トークン発行、サーバー登録、承認管理など）を行う。
+  version: 0.1.0
+
+servers:
+  - url: http://{host}:{port}
+    variables:
+      host:
+        default: 127.0.0.1
+      port:
+        default: "8080"
+
+tags:
+  - name: meta
+    description: アプリ/サーバー/スコープのメタ情報
+  - name: nodes
+    description: 管理対象ノードの状態取得
+  - name: tokens
+    description: MCPトークン管理
+  - name: agent-credentials
+    description: Agent認証情報管理
+  - name: approvals
+    description: Human Approval 承認管理
+
+security:
+  - bearerAuth: []
+  - basicAuth: []
+
+paths:
+  /api/meta:
+    get:
+      tags: [meta]
+      summary: メタ情報取得
+      operationId: getMeta
+      responses:
+        '200':
+          description: メタ情報
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MetaResponse'
+
+  /api/nodes:
+    get:
+      tags: [nodes]
+      summary: ノード一覧取得
+      operationId: listNodes
+      responses:
+        '200':
+          description: ノード一覧
+
+  /api/nodes/{server_id}:
+    get:
+      tags: [nodes]
+      summary: ノード詳細取得
+      parameters:
+        - $ref: '#/components/parameters/ServerId'
+      operationId: getNodeDetail
+      responses:
+        '200':
+          description: ノード詳細
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/nodes/{server_id}/disk:
+    get:
+      tags: [nodes]
+      summary: ノードディスク使用量取得
+      parameters:
+        - $ref: '#/components/parameters/ServerId'
+      operationId: getNodeDisk
+      responses:
+        '200':
+          description: ディスク使用量
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/nodes/{server_id}/processes:
+    get:
+      tags: [nodes]
+      summary: ノードプロセス一覧取得
+      parameters:
+        - $ref: '#/components/parameters/ServerId'
+      operationId: getNodeProcesses
+      responses:
+        '200':
+          description: プロセス一覧
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/tokens:
+    get:
+      tags: [tokens]
+      summary: トークン一覧取得
+      operationId: listTokens
+      responses:
+        '200':
+          description: トークン一覧
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenListResponse'
+    post:
+      tags: [tokens]
+      summary: トークン発行
+      operationId: createToken
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TokenCreateRequest'
+      responses:
+        '201':
+          description: トークン発行成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenCreateResponse'
+
+  /api/tokens/import:
+    post:
+      tags: [tokens]
+      summary: トークンインポート
+      operationId: importToken
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TokenImportRequest'
+      responses:
+        '201':
+          description: インポート成功
+
+  /api/tokens/{token_id}/rotate:
+    post:
+      tags: [tokens]
+      summary: トークンローテーション
+      parameters:
+        - $ref: '#/components/parameters/TokenId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TokenRotateRequest'
+      responses:
+        '200':
+          description: ローテーション成功
+
+  /api/tokens/{token_id}/revoke:
+    post:
+      tags: [tokens]
+      summary: トークン失効
+      parameters:
+        - $ref: '#/components/parameters/TokenId'
+      operationId: revokeToken
+      responses:
+        '200':
+          description: 失効成功
+
+  /api/tokens/{token_id}:
+    delete:
+      tags: [tokens]
+      summary: トークン削除
+      parameters:
+        - $ref: '#/components/parameters/TokenId'
+      operationId: deleteToken
+      responses:
+        '200':
+          description: 削除成功
+
+  /api/agent-credentials:
+    get:
+      tags: [agent-credentials]
+      summary: Agent認証情報一覧取得
+      operationId: listAgentCredentials
+      responses:
+        '200':
+          description: Agent認証情報一覧
+    post:
+      tags: [agent-credentials]
+      summary: Agent認証情報登録
+      operationId: registerAgentCredential
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentCredentialCreateRequest'
+      responses:
+        '201':
+          description: 登録成功
+
+  /api/agent-credentials/generate:
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+    basicAuth:
+      type: http
+      scheme: basic
+
+  parameters:
+    ServerId:
+      name: server_id
+      in: path
+      required: true
+      schema:
+        type: string
+      example: web-server-01
+    TokenId:
+      name: token_id
+      in: path
+      required: true
+      schema:
+        type: string
+      example: tok_1a2b3c4d5e6f
+    CredentialId:
+      name: credential_id
+      in: path
+      required: true
+      schema:
+        type: string
+      example: cred_7g8h9i0j1k2l
+    ApprovalId:
+      name: approval_id
+      in: path
+      required: true
+      schema:
+        type: string
+
+  responses:
+    NotFound:
+      description: リソースが見つからない
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+    MetaResponse:
+      type: object
+      properties:
+        app:
+          type: string
+        version:
+          type: string
+        servers:
+          type: array
+          items:
+            type: object
+        scopes:
+          type: array
+          items:
+            type: string
+        mcp:
+          type: object
+
+    TokenCreateRequest:
+      type: object
+      required: [name, scope, server_ids]
+      properties:
+        name:
+          type: string
+          maxLength: 100
+        scope:
+          type: string
+          enum: [readonly, operator]
+        server_ids:
+          type: array
+          items:
+            type: string
+        expires_in_days:
+          type: integer
+          minimum: 1
+          maximum: 3650
+        principal_id:
+          type: string
+
+    TokenImportRequest:
+      type: object
+      required: [name, token, server_ids, scope]
+      properties:
+        name:
+          type: string
+        token:
+          type: string
+        server_ids:
+          type: array
+          items:
+            type: string
+        scope:
+          type: string
+          enum: [readonly, operator]
+
+    TokenRotateRequest:
+      type: object
+      properties:
+        grace_period_days:
+          type: integer
+          default: 7
+          minimum: 1
+          maximum: 90
+        expires_in_days:
+          type: integer
+
+    TokenCreateResponse:
+      type: object
+      properties:
+        token:
+          type: string
+        prefix:
+          type: string
+        name:
+          type: string
+        scope:
+          type: string
+        server_ids:
+          type: array
+          items:
+            type: string
+        expires_at:
+          type: string
+
+    TokenListResponse:
+      type: object
+      properties:
+        tokens:
+          type: array
+          items:
+            type: object
+
+    AgentCredentialCreateRequest:
+      type: object
+      required: [server_id, name, token, agent_token_id]
+      properties:
+        server_id:
+          type: string
+        name:
+          type: string
+        token:
+          type: string
+        agent_token_id:
+          type: string
+        expires_in_days:
+          type: integer
+
+    AgentCredentialGenerateRequest:
+      type: object
+      required: [server_id, name, agent_token_id]
+      properties:
+        server_id:
+          type: string
+        name:
+          type: string
+        agent_token_id:
+          type: string
+        expires_in_days:
+          type: integer
+
+    ApproveRequest:
+      type: object
+      properties:
+        ttl_minutes:
+          type: integer
+          default: 15
+          minimum: 1
+          maximum: 1440
+
+    ErrorResponse:
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          type: string
+        error:
+          type: string
+    post:
+      tags: [agent-credentials]
+      summary: Agent認証情報生成
+      operationId: generateAgentCredential
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentCredentialGenerateRequest'
+      responses:
+        '201':
+          description: 生成成功
+
+  /api/agent-credentials/{credential_id}/revoke:
+    post:
+      tags: [agent-credentials]
+      summary: Agent認証情報失効
+      parameters:
+        - $ref: '#/components/parameters/CredentialId'
+      responses:
+        '200':
+          description: 失効成功
+        '202':
+          description: ローカル失効済み、Agent同期pending
+
+  /api/approvals:
+    get:
+      tags: [approvals]
+      summary: 承認要求一覧取得
+      operationId: listApprovals
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+      responses:
+        '200':
+          description: 承認要求一覧
+
+  /api/approvals/{approval_id}/approve:
+    post:
+      tags: [approvals]
+      summary: 承認要求を承認
+      parameters:
+        - $ref: '#/components/parameters/ApprovalId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApproveRequest'
+      responses:
+        '200':
+          description: 承認成功

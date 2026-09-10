@@ -1,0 +1,36 @@
+# =====================================================================
+# Linux Remote Management MCP Server 設定（Dockerテスト用）
+#
+# Dockerコンテナで管理コンソールを起動するための設定。
+# 実機Agent (acemagic01) にmTLSで接続する。
+# =====================================================================
+
+console:
+  host: "0.0.0.0"
+  port: 8080
+  data_dir: "./data"
+  auth_required: true
+  auth_mode: basic
+
+mcp:
+  host: "0.0.0.0"
+  port: 8090
+  path: "/"
+  enabled: true
+  stdio_token_env: LINUX_MCP_TOKEN
+
+agent:
+  timeout_seconds: 10
+  tls_verify: certs/acemagic01-ca.crt   # 自己署名CAの検証
+  user_agent: linux-mcp-server/0.1
+  # mTLS: クライアント証明書
+  client_cert: certs/mcp-client.crt
+  client_key: certs/mcp-client.key
+
+# ---- 管理対象ノード ----
+servers:
+  - id: acemagic01
+    name: "acemagic01 (Agent)"
+    url: https://192.168.10.114:9443
+    env: testing
+    description: "acemagic01 Agent (mTLS有効)"

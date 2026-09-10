@@ -1,0 +1,34 @@
+version: "3.8"
+
+services:
+  mcp-console:
+    build:
+      context: .
+      dockerfile: Dockerfile.console
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./mcp-server/data:/app/data
+      - ./mcp-server/certs:/app/certs:ro
+      - ./mcp-server/config.docker.yml:/app/config.docker.yml:ro
+    environment:
+      - MCP_CONFIG_FILE=/app/config.docker.yml
+      - LINUX_MCP_CONSOLE_USER=${LINUX_MCP_CONSOLE_USER:-admin}
+      - LINUX_MCP_CONSOLE_PASS=${LINUX_MCP_CONSOLE_PASS:-admin123}
+    command: ["uvicorn", "console.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8080"]
+    restart: unless-stopped
+
+  mcp-http:
+    build:
+      context: .
+      dockerfile: Dockerfile.console
+    ports:
+      - "8090:8090"
+    volumes:
+      - ./mcp-server/data:/app/data
+      - ./mcp-server/certs:/app/certs:ro
+      - ./mcp-server/config.docker.yml:/app/config.docker.yml:ro
+    environment:
+      - MCP_CONFIG_FILE=/app/config.docker.yml
+    command: ["python", "-m", "app.mcp_http_entry"]
+    restart: unless-stopped

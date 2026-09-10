@@ -509,15 +509,24 @@ python scripts/verify_env.py --network --json > /tmp/verify_env_$(date +%F).json
 
 ```text
 [x] A: 別Linuxサーバー（Agent導入用）が提供された（A-4 の貼付あり）
-[ ] B: 本番MCP Server導入サーバーが提供された（B-4 の貼付あり）
+[x] B: 本番MCP Server導入サーバーが提供された（B-4 の貼付あり）※ 本番=このPC(Windows)、Dockerで管理コンソール稼働
 [x] C: mTLS用証明書一式（CA / server / client）が発行・受け渡しされた（C-5 の貼付あり）※ CRL/OCSP は未準備（P2-12 時に作成）
-[ ] D: ネットワーク境界情報（管理NW/利用者NW/VPN/firewall権限）が判明した（D-3 の貼付あり）
-[ ] E: systemd 導入が可能（root権限）である（E-1 の貼付あり）
-[ ] F-1: verify_env.py --network で FAIL=0（要約行を貼付）
+[x] D: ネットワーク境界情報（管理NW/利用者NW/VPN/firewall権限）が判明した（D-3 の貼付あり）※ Agent疎通確認済み (192.168.10.114:9443)
+[x] E: systemd 導入が可能（root権限）である（E-1 の貼付あり）※ Agent側(acemagic01)のみ確認。MCP Server側はWindowsのため対象外
+[x] F-1: verify_env.py --network で FAIL=0（要約行を貼付）
 ```
 
 > **2026-09-10 進捗**: A（acemagic01確認済み）、C（証明書発行・検収済み、mTLS有効化済み）が完了。B/D/E/F-1 は未実施。次回 B（MCP Serverホスト確認）→ D（NW境界）→ E（systemd）→ F-1（verify_env再実行）の順に進める。
 
+> **2026-09-10 進捗 (第2報)**: B/D/E/F-1 完了。
+> - **構成確定**: acemagic01 (192.168.10.114) = Agentホスト / このPC (Windows) = MCP Serverホスト (systemd対象外、Python起動) / Docker (このPC上) = 管理コンソール (8080)
+> - **B**: MCP Serverホスト=Windows のため systemd unit は対象外。Agent側 Ubuntu 24.04.3 / Python 3.12.3 / systemd 255 確認済み
+> - **D**: ping 192.168.10.114 OK / https://192.168.10.114:9443/v1/health = HTTP 200 (mTLS)
+> - **E**: acemagic01 は systemd 255 / PID1=systemd で導入可能。MCP Server側は Windows のため対象外
+> - **F-1**: **FAIL=0 達成** `summary: PASS=14 WARN=2 FAIL=0 SKIP=8` (WARN: SIEM webhook未設定、コンソールBasic認証資格 未設定)
+> - **修正**: httpx 0.28.1 で `verify=<CAパス>` + `cert=tuple` だとクライアント証明書が送信されないため、`app/config.py::_build_agent_ssl_context()` で明示SSLContextを構築する方式に変更 (agent_client.py / verify_env.py 両方に適用、テスト 234 passed)
+>
+> **2026-09-10 進捗**: A（acemagic01確認済み）、C（証明書発行・検収済み、mTLS有効化済み）が完了。B/D/E/F-1 は未実施。次回 B（MCP Serverホスト確認）→ D（NW境界）→ E（systemd）→ F-1（verify_env再実行）の順に進める。
 すべて `[x]` になったら、Plane 事前準備チケットに記録し、**P0-2 → 3.1 → P1-6 → P2-10 → P2-12** の順に実環境検証を実施する。
 
 ### F-2. Plane 事前準備チケットへの記録テンプレ

@@ -34,6 +34,7 @@ from .oidc_browser import (
     exchange_code,
     _pkce_challenge,
 )
+from .swagger_docs import setup_swagger_ui, add_openapi_tag_metadata
 from app.approvals import ApprovalStore
 from app.config import AppConfig, load_config
 from app.db import TokenStore
@@ -327,6 +328,10 @@ def create_app(config: AppConfig | None = None, store: TokenStore | None = None)
     app.include_router(servers_router)
     # 承認APIは require_approval=False でも常設する (無効時は各エンドポイントが503を返す)
     app.include_router(approvals_router)
+
+    # Swagger UI / ReDoc 設定
+    setup_swagger_ui(app, title="Linux Remote Management MCP", version=__version__)
+    add_openapi_tag_metadata(app)
 
     templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 

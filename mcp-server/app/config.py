@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import re
+import ssl
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -329,6 +330,37 @@ def _find_config(explicit: str | Path | None) -> Path:
         "config.yml が見つかりません。LINUX_MCP_CONFIG 環境変数でパスを指定するか、"
         "mcp-server/config.yml を配置してください。"
     )
+
+
+def _build_agent_ssl_context(tls_verify: bool | str, client_cert: str = "", client_key: str = "") -> ssl.SSLContext:
+    """Agent通信用のSSLContextを構築する。
+
+    httpx 0.28以降は ``verify=<CAパス>`` + ``cert=(crt, key)`` の組み合わせで
+    クライアント証明書が送信されないケースがあるため、明示的にSSLContextを
+    構築して ``verify=ctx`` として渡す。
+
+    Args:
+        tls_verify: True/False または CA証明書ファイルパス
+        client_cert: クライアント証明書パス (空ならmTLS無効)
+        client_key: クライアント秘密鍵パス
+
+    Returns:
+        構築済みSSLContext
+    """
+    if isinstance(tls_verify, ssl.SSLContext):
+        ctx = tls_verify
+    elif isinstance(tls_verify, str):
+        # CA証明書パス指定
+        ctx = ssl.create_default_context(cafile=tls_verify)
+    elif tls_verify:
+        ctx = ssl.create_default_context()
+    else:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+    if client_cert and client_key:
+        ctx.load_cert_chain(client_cert, client_key)
+    return ctx
 
 
 def _tls_verify_from_raw(raw: dict[str, Any]) -> bool | str:
