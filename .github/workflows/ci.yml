@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  go-tests:
+    name: Go Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Go vet
+        working-directory: ./lrm-mcp-agent
+        run: go vet ./...
+
+      - name: Go tests
+        working-directory: ./lrm-mcp-agent
+        run: go test ./... -v -count=1
+
+      - name: Go build
+        working-directory: ./lrm-mcp-agent
+        run: go build -v ./...
+
+  go-security:
+    name: Go Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Run gosec
+        uses: securego/gosec@master
+        with:
+          args: ./lrm-mcp-agent/...
+
+  python-tests:
+    name: Python Tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        working-directory: ./mcp-server
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov
+
+      - name: Python lint (flake8)
+        working-directory: ./mcp-server
+        run: |
+          pip install flake8
+          flake8 app/ console/ --max-line-length=120 --statistics
+
+      - name: Python security (bandit)
+        working-directory: ./mcp-server
+        run: |
+          pip install bandit
+          bandit -r app/ console/ -ll
+
+      - name: Python tests
+        working-directory: ./mcp-server
+        run: |
+          python -m pytest tests/ -v --tb=short
+
+  docker-build:
+    name: Docker Build Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check Dockerfiles exist
+        run: |
+          test -f lrm-mcp-agent/Dockerfile
+          echo "Dockerfile exists"

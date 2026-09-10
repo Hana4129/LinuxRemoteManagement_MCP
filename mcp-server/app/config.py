@@ -78,6 +78,8 @@ class ConsoleConfig:
     oidc_token_endpoint: str = ""
     session_cookie_secure: bool = True
     session_lifetime_minutes: int = 480
+    max_sessions: int = 100
+    idle_timeout_minutes: int = 60
     siem_webhook: str = ""
     siem_api_key: str = ""
     require_approval: bool = True
@@ -479,8 +481,8 @@ def _is_loopback_url(url: str) -> bool:
     try:
         host = (urlsplit(url).hostname or "").lower()
     except ValueError:
-
-def resolve_config_path() -> Path:
+        return False
+    return host in {"localhost", "127.0.0.1", "::1"} or host.endswith(".localhost")
     """環境変数から設定ファイルのパスを解決する。
 
     優先順位:
@@ -522,5 +524,3 @@ def resolve_config_path() -> Path:
 def load_config_auto() -> AppConfig:
     """環境変数に基づいて設定ファイルを自動解決して読み込む。"""
     return _load_config_from_path(resolve_config_path())
-        return False
-    return host in {"localhost", "127.0.0.1", "::1"} or host.endswith(".localhost")

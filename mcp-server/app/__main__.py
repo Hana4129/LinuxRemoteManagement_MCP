@@ -19,12 +19,15 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from app.config import load_config
+from app.config_reload import setup_config_reload
 from console.main import create_app
 
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     config = load_config()
+    # ホットリロード初期化
+    setup_config_reload(config)
     app = create_app(config)
     uvicorn.run(app, host=config.console.host, port=config.console.port, log_level="info")
 

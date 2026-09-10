@@ -13,6 +13,7 @@ from .mcp_audit import McpAudit
 from .approvals import ApprovalStore
 from .mcp_ratelimit import install_rate_limit
 from .mcp_server import build_mcp
+from .session_manager import get_session_manager
 
 
 def create_mcp_http_app(config: AppConfig, store: TokenStore | None = None) -> FastAPI:
@@ -21,17 +22,55 @@ def create_mcp_http_app(config: AppConfig, store: TokenStore | None = None) -> F
     audit = McpAudit(config.data_dir / "mcp_audit.log") if config.console.mcp_audit else None
     mcp = build_mcp(config, store, approvals=approvals, audit=audit)
 
+    # セッション管理マネージャー初期化
+    session_manager = get_session_manager(
+        session_timeout_minutes=getattr(config.console, "session_lifetime_minutes", 480),
+        max_sessions=getattr(config.console, "max_sessions", 100),
+        idle_timeout_minutes=getattr(config.console, "idle_timeout_minutes", 60),
+    )
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        session_manager = getattr(mcp, "_session_manager", None) or getattr(mcp, "session_manager", None)
-        if session_manager is not None:
-            async with session_manager.run():
+        session_manager_attr = getattr(mcp, "_session_manager", None) or getattr(mcp, "session_manager", None)
+        if session_manager_attr is not None:
+            async with session_manager_attr.run():
                 yield
         else:
             yield
 
     app = FastAPI(title="Linux Remote Management MCP", version="0.1.0", lifespan=lifespan)
     prefix = config.mcp.path.rstrip("/") or "/"
+
+    @app.middleware("http")
+    async def session_middleware(request: Request, call_next):
+        """セッション管理ミドルウェア。全リクエストをトラッキングする。"""
+        # MCP プレフィックス以外のリクエストはスキップ
+        if request.url.path != prefix and not request.url.path.startswith(prefix + "/"):
+            return await call_next(request)
+
+        # Authorization ヘッダーからセッションを特定
+        header = request.headers.get("Authorization", "")
+        session = None
+        if header.startswith("Bearer "):
+            from .auth import authenticate_raw_token
+            raw = header[7:].strip()
+            token = authenticate_raw_token(store, raw)
+            if token is not None:
+                # セッションIDがヘッダーにあれば既存セッションを取得、なければ新規作成
+                session_id = request.headers.get("X-Session-ID", "")
+                if session_id:
+                    session = session_manager.get_session(session_id)
+                if session is None:
+                    session = session_manager.create_session(
+                        token_name=token.name,
+                        server_id="",
+                    )
+                # セッションIDをレスポンスヘッダーに追加
+                response = await call_next(request)
+                response.headers["X-Session-ID"] = session.session_id
+                return response
+
+        return await call_next(request)
 
     @app.middleware("http")
     async def bearer_auth(request: Request, call_next):
