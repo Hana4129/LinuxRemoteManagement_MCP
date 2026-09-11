@@ -382,6 +382,8 @@ $("#add-node-form").onsubmit = async (e) => {
   }
 };
 
+$("#t-cancel").onclick = () => $("#token-dialog").close();
+$("#p-cancel").onclick = () => $("#principal-dialog").close();
 $("#n-cancel").onclick = () => $("#add-node-dialog").close();
 
 async function doDeleteNode(nodeId) {
