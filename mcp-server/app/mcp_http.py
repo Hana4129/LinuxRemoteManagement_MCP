@@ -29,11 +29,17 @@ def create_mcp_http_app(config: AppConfig, store: TokenStore | None = None) -> F
         idle_timeout_minutes=getattr(config.console, "idle_timeout_minutes", 60),
     )
 
+    # FastMCP の StreamableHTTPSessionManager は mcp.http_app() の lifespan で
+    # 初期化される (task group 開始)。この lifespan を親 FastAPI へ引き継がないと
+    # "FastMCP's StreamableHTTPSessionManager task group was not initialized"
+    # エラーになるため、先に http_app() を作成して lifespan を取得する。
+    asgi = mcp.http_app(transport="streamable-http", json_response=True, path="/")
+    mcp_lifespan = getattr(asgi, "lifespan", None)
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        session_manager_attr = getattr(mcp, "_session_manager", None) or getattr(mcp, "session_manager", None)
-        if session_manager_attr is not None:
-            async with session_manager_attr.run():
+        if mcp_lifespan is not None:
+            async with mcp_lifespan(app):
                 yield
         else:
             yield
@@ -101,6 +107,5 @@ def create_mcp_http_app(config: AppConfig, store: TokenStore | None = None) -> F
         token_burst=config.console.rate_limit_token_burst,
     )
 
-    asgi = mcp.http_app(transport="streamable-http", json_response=True, path="/")
     app.mount(prefix, asgi)
     return app
