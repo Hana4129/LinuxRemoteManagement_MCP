@@ -345,6 +345,9 @@ function openAddNodeDialog() {
   $("#n-env").value = "development";
   $("#n-desc").value = "";
   $("#n-issue-token").checked = false;
+  $("#n-token-name").value = "";
+  $("#n-token-scope").value = "readonly";
+  $("#n-token-expires").value = "30";
   $("#token-options").style.display = "none";
   $("#add-node-dialog").showModal();
 }
@@ -362,8 +365,9 @@ $("#add-node-form").onsubmit = async (e) => {
     env: $("#n-env").value,
     description: $("#n-desc").value.trim(),
     issue_token: $("#n-issue-token").checked,
-    token_name: $("#n-issue-token").checked ? $("#n-name").value.trim() + " access" : null,
+    token_name: $("#n-issue-token").checked ? $("#n-token-name").value.trim() || null : null,
     token_scope: $("#n-token-scope").value,
+    token_expires_in_days: $("#n-issue-token").checked && $("#n-token-expires").value ? Number($("#n-token-expires").value) : null,
   };
   try {
     const result = await fetchJSON(API + "/servers", { method: "POST", body: JSON.stringify(payload) });

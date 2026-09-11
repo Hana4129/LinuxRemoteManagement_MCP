@@ -212,16 +212,26 @@
           <option value="production">Production</option>
         </select></div>
       <div class="field"><label>Description</label><textarea id="n-desc" placeholder="Optional"></textarea></div>
-      <div class="field"><label><input type="checkbox" id="n-issue-token"> Issue MCP token automatically</label></div>
-      <div class="field" id="token-options" style="display:none;">
-        <label>Token Scope</label>
-        <select id="n-token-scope">
-          <option value="readonly">readonly</option>
-          <option value="operator">operator</option>
-        </select>
-      </div>
+      <div class="field checkbox-field"><label><input type="checkbox" id="n-issue-token"> Issue MCP token automatically <span class="checkbox-hint">— Check this to generate an access token for this node at the same time. The raw token will be shown once after adding.</span></label></div>
+      <fieldset id="token-options" style="display:none;" class="token-fieldset">
+        <legend>Token options</legend>
+        <div class="field"><label>Token name</label><input type="text" id="n-token-name" placeholder="e.g. web-prod-01 access"></div>
+        <div class="field"><label>Token Scope</label>
+          <select id="n-token-scope">
+            <option value="readonly">readonly (view only)</option>
+            <option value="operator">operator (commands allowed)</option>
+          </select></div>
+        <div class="field"><label>Token expiry</label>
+          <select id="n-token-expires">
+            <option value="">Never</option>
+            <option value="7">7 days</option>
+            <option value="30" selected>30 days</option>
+            <option value="90">90 days</option>
+            <option value="365">1 year</option>
+          </select></div>
+      </fieldset>
       <div class="dialog-actions">
-        <button type="reset" class="btn" id="n-cancel">Cancel</button>
+        <button type="button" class="btn" id="n-cancel">Cancel</button>
         <button type="submit" class="btn primary">Add Node</button>
       </div>
     </form>
