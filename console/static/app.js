@@ -1,7 +1,7 @@
 "use strict";
 /* 社内管理コンソール UI ロジック (vanilla JS, 外部CDN不要) */
 const API = "/api";
-const state = { meta: null, nodes: [], tokens: [], auto: true, timer: null, csrf: null };
+const state = { meta: null, nodes: [], tokens: [], auto: true, timer: null, csrf: null, loading: false, approvalTimer: null };
 const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 const $ = (s, c = document) => c.querySelector(s);
@@ -430,7 +430,14 @@ async function doDeleteNode(nodeId) {
 
 function startAuto() {
   if (state.timer) clearInterval(state.timer);
-  state.timer = setInterval(() => { if (state.auto) { loadNodes(); loadTokens(); } }, 30000);
+  state.timer = setInterval(() => {
+    if (!state.auto || state.loading) return;
+    state.loading = true;
+    Promise.all([
+      loadNodes().catch(() => {}),
+      loadTokens().catch(() => {}),
+    ]).finally(() => { state.loading = false; });
+  }, 30000);
 }
 async function init() {
   setupTabs();
