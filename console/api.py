@@ -413,12 +413,21 @@ def _sync_revocation_to_agent(request: Request, server: ServerConfig, agent_toke
     """
     import httpx
 
+    from app.config import _build_agent_ssl_context
+
     cfg = request.app.state.config
+    # Agent は mTLS 必須の場合があるため、クライアント証明書込みの SSLContext を使う
+    # (httpx 0.28 では verify=<CAパス> + cert=tuple でクライアント証明書が送信されない)
+    ssl_context = _build_agent_ssl_context(
+        cfg.agent.tls_verify,
+        client_cert=cfg.agent.client_cert,
+        client_key=cfg.agent.client_key,
+    )
     try:
         response = httpx.post(
             server.url.rstrip("/") + "/v1/admin/tokens/" + agent_token_id + "/revoke",
             headers={"X-LRM-Admin-Token": cfg.agent.admin_token},
-            verify=cfg.agent.tls_verify,
+            verify=ssl_context,
             timeout=cfg.agent.timeout_seconds,
         )
     except httpx.HTTPError as exc:

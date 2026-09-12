@@ -308,12 +308,19 @@ def _preserve_env_ref(source: dict[str, Any] | None, key: str, resolved: Any) ->
 
 
 def _find_config(explicit: str | Path | None) -> Path:
-    """config.yml のパスを解決する。引数 > 環境変数 > カレント > パッケージ同梱。"""
+    """config.yml のパスを解決する。引数 > MCP_CONFIG_FILE > LINUX_MCP_CONFIG > カレント > パッケージ同梱。"""
     if explicit is not None:
         path = Path(explicit)
         if not path.exists():
             raise FileNotFoundError(f"指定された設定ファイルが存在しません: {path}")
         return path
+
+    mcp_config_file = os.environ.get("MCP_CONFIG_FILE")
+    if mcp_config_file:
+        path = Path(mcp_config_file)
+        if path.is_file():
+            return path
+        raise FileNotFoundError(f"MCP_CONFIG_FILE={mcp_config_file} が存在しません")
 
     env_path = os.environ.get("LINUX_MCP_CONFIG")
     if env_path:
@@ -515,6 +522,9 @@ def _is_loopback_url(url: str) -> bool:
     except ValueError:
         return False
     return host in {"localhost", "127.0.0.1", "::1"} or host.endswith(".localhost")
+
+
+def resolve_config_path() -> Path:
     """環境変数から設定ファイルのパスを解決する。
 
     優先順位:
@@ -555,4 +565,4 @@ def _is_loopback_url(url: str) -> bool:
 
 def load_config_auto() -> AppConfig:
     """環境変数に基づいて設定ファイルを自動解決して読み込む。"""
-    return _load_config_from_path(resolve_config_path())
+    return load_config(resolve_config_path())
