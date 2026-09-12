@@ -111,12 +111,10 @@ async function createPrincipal(e) {
   } catch (err) { toast(err.message, "err"); }
 }
 function grantPrincipal(id) {
-  const serverId = prompt("Server ID (または *):");
-  if (!serverId) return;
-  const scope = prompt("Scope (readonly/operator):", "readonly");
-  if (!["readonly", "operator"].includes(scope)) { toast("scopeが不正です", "err"); return; }
-  fetchJSON(API + `/principals/${encodeURIComponent(id)}/permissions`, { method: "POST", body: JSON.stringify({ server_id: serverId, scope }) })
-    .then(() => { toast("権限を付与しました", "ok"); loadPrincipals(); }).catch((e) => toast(e.message, "err"));
+  $("#g-server").value = "";
+  $("#g-scope").value = "readonly";
+  $("#grant-dialog").showModal();
+  $("#grant-form").dataset.principalId = id;
 }
 function disablePrincipal(id) {
   confirmAction("Principal無効化", "principalと紐付くMCP tokenを無効化しますか。", async () => {
@@ -440,6 +438,17 @@ async function init() {
   $("#reload-principals").onclick = () => { loadPrincipals(); loadAgentCredentials(); };
   $("#open-principal-dialog").onclick = () => { $("#principal-form").reset(); $("#principal-dialog").showModal(); };
   $("#principal-form").onsubmit = createPrincipal;
+  $("#grant-form").onsubmit = (e) => {
+    e.preventDefault();
+    const id = $("#grant-form").dataset.principalId;
+    const serverId = $("#g-server").value.trim();
+    const scope = $("#g-scope").value;
+    if (!serverId) { toast("Server IDを入力してください", "err"); return; }
+    fetchJSON(API + `/principals/${encodeURIComponent(id)}/permissions`, { method: "POST", body: JSON.stringify({ server_id: serverId, scope }) })
+      .then(() => { toast("権限を付与しました", "ok"); loadPrincipals(); $("#grant-dialog").close(); })
+      .catch((e) => toast(e.message, "err"));
+  };
+  $("#g-cancel").onclick = () => $("#grant-dialog").close();
   $("#agent-credential-form").onsubmit = registerAgentCredential;
   $("#principals-tbody").addEventListener("click", (e) => {
     const btn = e.target.closest("button[data-access-action]");

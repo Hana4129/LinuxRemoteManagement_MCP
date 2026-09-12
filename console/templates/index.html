@@ -226,7 +226,19 @@
     </form>
   </dialog>
 
-  <dialog id="token-result" class="dialog">
+  <dialog id="grant-dialog" class="dialog">
+    <form method="dialog" id="grant-form">
+      <h2>Grant Permission</h2>
+      <p class="hint">Grant access permission to this principal.</p>
+      <div class="field"><label>Server ID</label><input type="text" id="g-server" placeholder="Server ID or *" required></div>
+      <div class="field"><label>Scope</label>
+        <select id="g-scope">
+          <option value="readonly">readonly (view only)</option>
+          <option value="operator">operator (commands allowed)</option>
+        </select></div>
+      <div class="dialog-actions"><button type="button" class="btn" id="g-cancel">Cancel</button><button type="submit" class="btn primary">Grant</button></div>
+    </form>
+  </dialog>
     <div class="result">
       <h2>Token Issued</h2>
       <p class="hint">Save this token safely. It won't be shown again after you close this dialog.</p>
