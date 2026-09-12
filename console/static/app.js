@@ -42,7 +42,12 @@ async function fetchJSON(url, opt = {}) {
   const method = opt.method || "GET";
   const headers = { "Content-Type": "application/json", ...(opt.headers || {}) };
   if (state.csrf && MUTATING.has(method)) headers["X-CSRF-Token"] = state.csrf;
-  let r = await fetch(url, { ...opt, method, headers });
+  /* ネットワーク層エラー (DNS失敗・接続拒否・TLS失敗等) は fetch が TypeError を投げるため、
+     ユーザーフレンドリーなメッセージに変換する (呼び出し元の toast(e.message) で表示される)。 */
+  const doFetch = () => fetch(url, { ...opt, method, headers }).catch(() => {
+    throw new Error(`サーバーに接続できません (${method} ${url})。ネットワーク接続を確認してください。`);
+  });
+  let r = await doFetch();
   // 401/403 (セッション切れ・CSRF失敗): ブラウザログインが有効なら復旧を試みる
   if ((r.status === 401 || r.status === 403) && !url.startsWith("/api/auth/")) {
     const me = await fetch("/api/auth/me", { headers: { "Accept": "application/json" }, redirect: "error" }).catch(() => null);
@@ -51,7 +56,7 @@ async function fetchJSON(url, opt = {}) {
       if (body.csrf_token && body.csrf_token !== state.csrf) {
         state.csrf = body.csrf_token;
         headers["X-CSRF-Token"] = state.csrf;
-        r = await fetch(url, { ...opt, method, headers }); // CSRFトークン再取得後に1回リトライ
+        r = await doFetch(); // CSRFトークン再取得後に1回リトライ
       }
     } else if (me && me.status !== 404) {
       // セッション切れ → ログイン画面へ
@@ -288,7 +293,13 @@ function renderHelp() {
   const host = mcp.http_host || "127.0.0.1";
   const port = mcp.http_port || 8090;
   const path = mcp.http_path || "/";
-  const displayHost = host === "0.0.0.0" ? "127.0.0.1" : host;
+  /* ワイルドカード (0.0.0.0/::) やループバック (127.0.0.1/localhost) バインドのときは、
+     ブラウザが実際にアクセスしているホストで置き換える。
+     Docker環境やリモートPCからのアクセスでは、設定値のままでは到達できないため。 */
+  const browserHost = window.location && window.location.hostname;
+  const isWildcard = ["0.0.0.0", "::", ""].includes(host);
+  const isLoopback = ["127.0.0.1", "localhost", "::1"].includes(host);
+  const displayHost = (isWildcard || isLoopback) && browserHost ? browserHost : host;
   const httpLine = mcp.http_enabled
     ? `      // MCP-over-HTTP: http://${displayHost}:${port}${path}`
     : "";
@@ -362,8 +373,14 @@ async function doApproveAction(action, id) {
       toast(okMsg, "ok"); loadApprovals();
     } catch (e) { toast(e.message, "err"); }
   };
-  if (action === "approve") confirmAction("Approve restart?", `Approve ${id}? The MCP client can then execute restart_service once.`, doIt, "Approve");
-  else doIt();
+  /* すべての承認操作 (approve/reject/delete) で確認ダイアログを出し、誤操作を防ぐ。 */
+  const specs = {
+    approve: { title: "承認確認", body: `要求 ${id} を承認しますか。承認後、MCPクライアントは restart_service を1回実行できます。`, ok: "Approve" },
+    reject: { title: "却下確認", body: `要求 ${id} を却下しますか。却下後は取り消せません。`, ok: "Reject" },
+    delete: { title: "削除確認", body: `要求 ${id} を削除しますか。この操作は取り戻せません。`, ok: "Delete" },
+  };
+  const spec = specs[action] || { title: "実行確認", body: `要求 ${id} に対して「${action}」を実行しますか。`, ok: "Execute" };
+  confirmAction(spec.title, spec.body, doIt, spec.ok);
 }
 
 
