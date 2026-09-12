@@ -284,8 +284,13 @@ async function doDelete(id) {
 function renderHelp() {
   const c = $("#mcp-config-snippet");
   if (!state.meta) { c.textContent = "読み込み中…"; return; }
-  const httpLine = state.meta.mcp?.http_enabled
-    ? `      // MCP-over-HTTP: http://127.0.0.1:8443${state.meta.mcp.http_path || "/mcp"}`
+  const mcp = state.meta.mcp || {};
+  const host = mcp.http_host || "127.0.0.1";
+  const port = mcp.http_port || 8090;
+  const path = mcp.http_path || "/";
+  const displayHost = host === "0.0.0.0" ? "127.0.0.1" : host;
+  const httpLine = mcp.http_enabled
+    ? `      // MCP-over-HTTP: http://${displayHost}:${port}${path}`
     : "";
   const lines = [
     "{",
