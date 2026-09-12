@@ -18,7 +18,21 @@ function fmtDate(iso) {
   if (!iso) return "-";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleString("ja-JP", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  const now = Date.now();
+  const diff = now - d.getTime();
+  const absDiff = Math.abs(diff);
+  const sec = Math.floor(absDiff / 1000);
+  const min = Math.floor(sec / 60);
+  const hr = Math.floor(min / 60);
+  const day = Math.floor(hr / 24);
+  let relative;
+  if (sec < 60) relative = "たった今";
+  else if (min < 60) relative = `${min}分前`;
+  else if (hr < 24) relative = `${hr}時間前`;
+  else if (day < 7) relative = `${day}日前`;
+  else relative = d.toLocaleDateString("ja-JP", { month: "2-digit", day: "2-digit" });
+  const absolute = d.toLocaleString("ja-JP", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  return `<span title="${absolute}">${relative}</span>`;
 }
 function esc(s) {
   if (s == null) return "";
