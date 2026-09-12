@@ -54,7 +54,12 @@ tbody tr:hover{background:#f9fbfc}
 .loading{color:var(--muted);text-align:center;padding:24px}
 .hint{color:var(--muted);font-size:12px;margin-top:10px}
 .help-card{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:18px;line-height:1.7}
-.help-card h2{margin-top:0}
+.seq-diagram{font-family:'SFMono-Regular',Consolas,monospace;font-size:12px;line-height:1.5;background:#f6f8fa;border:1px solid var(--border);border-radius:6px;padding:14px;overflow:auto;white-space:pre;color:var(--text)}
+.auth-flow-table{width:100%;border-collapse:collapse;font-size:13px;margin-bottom:16px}
+.auth-flow-table th,.auth-flow-table td{padding:9px 12px;border-bottom:1px solid var(--border);text-align:left;vertical-align:middle}
+.auth-flow-table th{background:#f6f8fa;color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.3px}
+.auth-flow-table tbody tr:hover{background:#f9fbfc}
+.help-card h4{margin:16px 0 8px 0;font-size:14px;color:var(--text)}
 .help-card pre{background:#f6f8fa;border:1px solid var(--border);border-radius:6px;padding:12px;overflow:auto;font-size:12px}
 .field{display:flex;flex-direction:column;gap:4px;margin-bottom:10px}
 .field label{font-size:13px;font-weight:600}

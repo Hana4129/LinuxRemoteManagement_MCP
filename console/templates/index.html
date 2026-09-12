@@ -127,6 +127,57 @@
       <div class="help-card">
         <h2>Management Console</h2>
         <p>This console is bundled with the MCP Server (FastAPI). It calls each node's Linux Agent via HTTPS with Bearer Token and displays install status, OS version, uptime, etc.</p>
+        <h3>Authentication &amp; credential flow</h3>
+        <p>The system uses three distinct credentials. Each is managed in a different UI tab:</p>
+        <table class="auth-flow-table">
+          <thead><tr><th>Credential</th><th>Where used</th><th>Managed in tab</th></tr></thead>
+          <tbody>
+            <tr><td><strong>MCP token</strong></td><td>MCP Client → MCP Server (Claude Desktop authenticates to MCP Server)</td><td>MCP Tokens</td></tr>
+            <tr><td><strong>Agent credential</strong></td><td>MCP Server → Linux Agent (mTLS + Bearer token for node access)</td><td>Access → Agent credentials</td></tr>
+            <tr><td><strong>Console session</strong></td><td>Browser → Management Console (Basic auth or OIDC login)</td><td>Login screen</td></tr>
+          </tbody>
+        </table>
+        <h4>Runtime sequence (command execution)</h4>
+        <pre class="seq-diagram">MCP Client        MCP Server         Linux Agent
+(Claude Desktop)  (this console)      (acemagic01:9443)
+     │                  │                    │
+     │  1. MCP token    │                    │
+     │  (Bearer)        │                    │
+     │─────────────────▶│                    │
+     │                  │  2. Agent cred     │
+     │                  │  (mTLS + Bearer)   │
+     │                  │───────────────────▶│
+     │                  │                    │
+     │                  │  3. Command result │
+     │                  │  (JSON)            │
+     │                  │◀───────────────────│
+     │  4. Response     │                    │
+     │◀─────────────────│                    │</pre>
+        <h4>Credential issuance sequence</h4>
+        <pre class="seq-diagram">Admin (Browser)    Console (8080)     MCP Server         Linux Agent
+     │                  │                  │                    │
+     │  1. Login        │                  │                    │
+     │  (Basic/OIDC)    │                  │                    │
+     │─────────────────▶│                  │                    │
+     │                  │                  │                    │
+     │  2. Issue Token  │                  │                    │
+     │  (MCP Tokens tab)│                  │                    │
+     │─────────────────▶│  3. Store hash    │                    │
+     │                  │  in tokens.db     │                    │
+     │                  │─────────────────▶│                    │
+     │  ◀── raw value   │                  │                    │
+     │     (once)       │                  │                    │
+     │                  │                  │                    │
+     │  4. Generate     │                  │                    │
+     │  Agent cred      │                  │                    │
+     │  (Access tab)    │                  │                    │
+     │─────────────────▶│  5. Register      │                    │
+     │                  │  (mTLS+admin tok) │                    │
+     │                  │─────────────────▶│  6. Store in       │
+     │                  │                  │  config.yml        │
+     │                  │                  │───────────────────▶│
+     │  ◀── raw value   │                  │                    │
+     │     (once)       │                  │                    │</pre>
         <h3>API</h3>
         <ul>
           <li><code>GET  /api/meta</code> - app / servers / scopes metadata</li>
