@@ -465,7 +465,13 @@ async function init() {
     if (btn.dataset.action === "revoke") doRevoke(id);
     else if (btn.dataset.action === "delete") doDelete(id);
   });
-  await Promise.all([loadNodes(), loadTokens(), loadPrincipals(), loadAgentCredentials(), loadApprovals()]);
+  await Promise.all([
+    loadNodes().catch((e) => toast("Nodes load error: " + e.message, "err")),
+    loadTokens().catch((e) => toast("Tokens load error: " + e.message, "err")),
+    loadPrincipals().catch((e) => toast("Principals load error: " + e.message, "err")),
+    loadAgentCredentials().catch((e) => toast("Credentials load error: " + e.message, "err")),
+    loadApprovals().catch((e) => toast("Approvals load error: " + e.message, "err")),
+  ]);
   startAuto();
   startApprovalAuto();
   const approvalsTbody = $("#approvals-tbody");
