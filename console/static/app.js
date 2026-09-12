@@ -242,6 +242,7 @@ function confirmAction(title, body, onOk) {
   $("#confirm-title").textContent = title;
   $("#confirm-body").textContent = body;
   $("#confirm-ok").onclick = () => { $("#confirm-dialog").close(); onOk(); };
+  $("#confirm-cancel").onclick = () => { $("#confirm-dialog").close(); };
   $("#confirm-dialog").showModal();
 }
 async function doRevoke(id) {
