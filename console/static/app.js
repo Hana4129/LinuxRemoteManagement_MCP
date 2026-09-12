@@ -120,7 +120,7 @@ function disablePrincipal(id) {
   confirmAction("Principal無効化", "principalと紐付くMCP tokenを無効化しますか。", async () => {
     try { await fetchJSON(API + `/principals/${encodeURIComponent(id)}/disable`, { method: "POST" }); toast("無効化しました", "ok"); loadPrincipals(); loadTokens(); }
     catch (e) { toast(e.message, "err"); }
-  });
+  }, "Disable");
 }
 async function loadAgentCredentials() {
   const tb = $("#agent-credentials-tbody");
@@ -141,7 +141,7 @@ function revokeAgentCredential(id) {
   confirmAction("Agent credential失効", "Agent側にも失効を同期します。続行しますか。", async () => {
     try { await fetchJSON(API + `/agent-credentials/${encodeURIComponent(id)}/revoke`, { method: "POST" }); toast("失効しました", "ok"); loadAgentCredentials(); }
     catch (e) { toast(e.message, "err"); }
-  });
+  }, "Revoke");
 }
 
 /* ---- nodes ---- */
@@ -247,9 +247,10 @@ function showTokenResult(raw, rec) {
   toast("トークンを発行しました (この画面でしか表示されません)", "ok");
   loadTokens();
 }
-function confirmAction(title, body, onOk) {
+function confirmAction(title, body, onOk, okLabel = "Execute") {
   $("#confirm-title").textContent = title;
   $("#confirm-body").textContent = body;
+  $("#confirm-ok").textContent = okLabel;
   $("#confirm-ok").onclick = () => { $("#confirm-dialog").close(); onOk(); };
   $("#confirm-cancel").onclick = () => { $("#confirm-dialog").close(); };
   $("#confirm-dialog").showModal();
@@ -258,13 +259,13 @@ async function doRevoke(id) {
   confirmAction("トークン失効確認", "このトークンを失効しますか。失効後 Agent への認証は即座に無効化されます。", async () => {
     try { await fetchJSON(API + `/tokens/${id}/revoke`, { method: "POST" }); toast("失効しました", "ok"); loadTokens(); }
     catch (e) { toast(e.message, "err"); }
-  });
+  }, "Revoke");
 }
 async function doDelete(id) {
   confirmAction("削除確認", "このトークンレコードを完全に削除しますか。取り戻せません。", async () => {
     try { await fetchJSON(API + `/tokens/${id}`, { method: "DELETE" }); toast("削除しました", "ok"); loadTokens(); }
     catch (e) { toast(e.message, "err"); }
-  });
+  }, "Delete");
 }
 function renderHelp() {
   const c = $("#mcp-config-snippet");
@@ -342,7 +343,7 @@ async function doApproveAction(action, id) {
       toast(okMsg, "ok"); loadApprovals();
     } catch (e) { toast(e.message, "err"); }
   };
-  if (action === "approve") confirmAction("Approve restart?", `Approve ${id}? The MCP client can then execute restart_service once.`, doIt);
+  if (action === "approve") confirmAction("Approve restart?", `Approve ${id}? The MCP client can then execute restart_service once.`, doIt, "Approve");
   else doIt();
 }
 
@@ -410,7 +411,7 @@ async function doDeleteNode(nodeId) {
     } catch (e) {
       toast(e.message, "err");
     }
-  });
+  }, "Delete");
 }
 
 function startAuto() {
