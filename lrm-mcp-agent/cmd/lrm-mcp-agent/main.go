@@ -56,7 +56,7 @@ func main() {
 	if certFile == "" || keyFile == "" {
 		certFile, keyFile = cfg.Agent.TLS.AutoCertFile, cfg.Agent.TLS.AutoKeyFile
 	}
-	tlsCfg, err := agent.LoadOrGenerateWithClientCA(certFile, keyFile, cfg.Agent.TLS.ClientCAFile)
+	tlsCfg, err := agent.LoadOrGenerateWithClientCAAndCRL(certFile, keyFile, cfg.Agent.TLS.ClientCAFile, cfg.Agent.TLS.CRLFile)
 	if err != nil {
 		log.Fatalf("tls setup failed: %v", err)
 	}

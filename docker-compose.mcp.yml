@@ -1,12 +1,16 @@
 version: "3.8"
 
+# P2-10 ネットワーク境界:
+#   管理コンソール / MCP HTTP は MCP Server ホストの loopback にのみ公開する。
+#   ( ports を "127.0.0.1:ホスト:コンテナ" 形式にすることで、LAN 上の他ホストから
+#     管理endpointへ到達できなくなる。リモートから使う場合は SSH トンネル等で中継する。)
 services:
   mcp-console:
     build:
       context: .
       dockerfile: Dockerfile.console
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     volumes:
       - ./mcp-server/data:/app/data
       - ./mcp-server/certs:/app/certs:ro
@@ -24,7 +28,7 @@ services:
       context: .
       dockerfile: Dockerfile.console
     ports:
-      - "8090:8090"
+      - "127.0.0.1:8090:8090"
     volumes:
       - ./mcp-server/data:/app/data
       - ./mcp-server/certs:/app/certs:ro

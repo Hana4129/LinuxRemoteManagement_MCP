@@ -14,7 +14,7 @@ import (
 // 有効な拡張子: service, socket, target, timer, mount, automont,
 //
 //	swap, device, path, slice, scope
-var serviceNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_.\-]+@[a-zA-Z0-9_.\-]*\.(service|socket|target|timer|mount|automount|swap|device|path|slice|scope)$`)
+var serviceNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_.\-]+(@[a-zA-Z0-9_.\-]*)?\.(service|socket|target|timer|mount|automount|swap|device|path|slice|scope)$`)
 
 // dangerousArgPatterns は実行を拒否する引数パターン。
 // シェルメタ文字、パストラバーサル、コマンドインジェクション試行を検出する。
@@ -77,6 +77,7 @@ func restrictSubcommand(command string, args []string) error {
 		// 未定義コマンドの場合は一般的な引数検証のみ実施
 		return validateArguments(args)
 	}
+	subcommandSeen := false
 	for _, arg := range args {
 		// フラグ形式 (--xxx) は許可リスト対象外なので一般検証のみ
 		if strings.HasPrefix(arg, "--") {
@@ -89,8 +90,17 @@ func restrictSubcommand(command string, args []string) error {
 		if strings.HasPrefix(arg, "-") && len(arg) == 2 {
 			continue
 		}
-		if !allowed[arg] {
-			return &validationError{reason: "subcommand not allowed: " + arg + " (allowed: " + joinKeys(allowed) + ")"}
+		// 先頭の非オプション引数をサブコマンドとして許可リストで検証する。
+		// 2番目以降 (サービス名等の引数) はサブコマンドではなく一般検証のみ行う。
+		if !subcommandSeen {
+			if !allowed[arg] {
+				return &validationError{reason: "subcommand not allowed: " + arg + " (allowed: " + joinKeys(allowed) + ")"}
+			}
+			subcommandSeen = true
+			continue
+		}
+		if err := validateArguments([]string{arg}); err != nil {
+			return err
 		}
 	}
 	return nil

@@ -37,6 +37,10 @@ type TLSConfig struct {
 	// ClientCAFile は mTLS 用: クライアント証明書の検証に使う CA 証明書ファイル。
 	// 設定すると、クライアント証明書の提示と検証が必須になる (RequireAndVerifyClientCert)。
 	ClientCAFile string `yaml:"client_ca_file"`
+	// CRLFile は mTLS 用の証明書失効リスト (X.509 CRL, PEM/DER)。
+	// 設定すると、CRL に載っているシリアル番号のクライアント証明書をハンドシェイク時に拒否する。
+	// 空文字の場合は CRL 検証を行わない。
+	CRLFile string `yaml:"crl_file"`
 }
 
 type TokenEntry struct {

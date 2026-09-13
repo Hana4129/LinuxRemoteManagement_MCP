@@ -21,9 +21,17 @@ func LoadOrGenerate(certFile, keyFile string) (*tls.Config, error) {
 	return LoadOrGenerateWithClientCA(certFile, keyFile, "")
 }
 
-// LoadOrGenerateWithClientCA は LoadOrGenerate と同様にサーバー証明書を準備し、さらに
-// clientCAFile が指定された場合は mTLS を有効にする (クライアント証明書の提示と検証が必須)。
+// LoadOrGenerateWithClientCA は mTLS を有効にする (クライアント証明書の提示と検証が必須)。
+// CRL による失効検証も行う場合は LoadOrGenerateWithClientCAAndCRL を使用する。
 func LoadOrGenerateWithClientCA(certFile, keyFile, clientCAFile string) (*tls.Config, error) {
+	return LoadOrGenerateWithClientCAAndCRL(certFile, keyFile, clientCAFile, "")
+}
+// LoadOrGenerateWithClientCAAndCRL は mTLS に加え、CRL (Certificate Revocation List) で
+// クライアント証明書が失効していないかを検証する。
+//   - crlFile は openssl ca -gencrl 相当で生成した X.509 CRL (PEM または DER) を指定する。
+//   - 空文字の場合は CRL 検証をしない (従来の LoadOrGenerateWithClientCA と同等)。
+//   - CRL に載っているシリアル番号のクライアント証明書は、CA検証を通過していても拒否する。
+func LoadOrGenerateWithClientCAAndCRL(certFile, keyFile, clientCAFile, crlFile string) (*tls.Config, error) {
 	cfg, err := loadOrGenerateBase(certFile, keyFile)
 	if err != nil {
 		return nil, err
@@ -42,7 +50,44 @@ func LoadOrGenerateWithClientCA(certFile, keyFile, clientCAFile string) (*tls.Co
 	}
 	cfg.ClientAuth = tls.RequireAndVerifyClientCert
 	cfg.ClientCAs = caPool
+
+	if crlFile != "" {
+		crlList, err := loadRevocationList(crlFile)
+		if err != nil {
+			return nil, err
+		}
+		// CA チェーン検証済みのクライアント証明書を CRL と照合し、失効していれば拒否する。
+		cfg.VerifyPeerCertificate = func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
+			if len(verifiedChains) == 0 || len(verifiedChains[0]) == 0 {
+				return fmt.Errorf("client certificate verification failed")
+			}
+			leaf := verifiedChains[0][0]
+			for _, entry := range crlList.RevokedCertificateEntries {
+				if entry.SerialNumber.Cmp(leaf.SerialNumber) == 0 {
+					return fmt.Errorf("client certificate %q is revoked (serial %s)", leaf.Subject.CommonName, leaf.SerialNumber)
+				}
+			}
+			return nil
+		}
+	}
 	return cfg, nil
+}
+
+// loadRevocationList は PEM または DER の X.509 CRL を読み込んで返す。
+func loadRevocationList(crlFile string) (*x509.RevocationList, error) {
+	data, err := os.ReadFile(crlFile)
+	if err != nil {
+		return nil, fmt.Errorf("read CRL: %w", err)
+	}
+	// PEM 形式 (openssl ca -gencrl の出力) は DER にデコードする。
+	if block, _ := pem.Decode(data); block != nil && block.Type == "X509 CRL" {
+		data = block.Bytes
+	}
+	crl, err := x509.ParseRevocationList(data)
+	if err != nil {
+		return nil, fmt.Errorf("parse CRL %s: %w", crlFile, err)
+	}
+	return crl, nil
 }
 
 // loadOrGenerateBase は証明書ファイルがあればロードし、無ければ自己署名証明書を生成する。
