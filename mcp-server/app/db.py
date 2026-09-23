@@ -418,6 +418,18 @@ class TokenStore:
             return None
         return self._row_to_record(row)
 
+    def get_token_raw(self, token_id: str) -> str:
+        """生トークンを復号して返す (管理Consoleのreveal専用)。
+
+        平文保存はせず、AES-256-GCMで暗号化された値を都度復号する。
+        復号できない場合や未登録の場合は空文字を返す。
+        """
+        with self._lock, self._connect() as conn:
+            row = conn.execute("SELECT token_raw FROM tokens WHERE id = ?", (token_id,)).fetchone()
+        if row is None:
+            return ""
+        return self._decrypt_raw(row["token_raw"])
+
     def get_by_raw(self, raw: str) -> TokenRecord | None:
         with self._lock, self._connect() as conn:
             row = conn.execute("SELECT * FROM tokens WHERE token_hash = ?", (hash_token(raw),)).fetchone()
@@ -613,6 +625,11 @@ class TokenStore:
     def revoke_agent_credential(self, credential_id: str) -> bool:
         with self._lock, self._connect() as conn:
             cur = conn.execute("UPDATE agent_credentials SET enabled=0 WHERE id=? AND enabled=1", (credential_id,))
+            return cur.rowcount > 0
+
+    def delete_agent_credential(self, credential_id: str) -> bool:
+        with self._lock, self._connect() as conn:
+            cur = conn.execute("DELETE FROM agent_credentials WHERE id=?", (credential_id,))
             return cur.rowcount > 0
 
     def set_agent_credential_sync_state(self, credential_id: str, state: str) -> None:

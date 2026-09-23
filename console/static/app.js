@@ -38,6 +38,26 @@ function esc(s) {
   if (s == null) return "";
   return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
+/* ダイアログ内エラー表示: toast はダイアログの backdrop の下に隠れるため、
+   開いている dialog 内にエラーメッセージを出す。開いている dialog がなければ toast にフォールバックする。 */
+function dialogError(message) {
+  const open = document.querySelector("dialog[open]");
+  if (!open) { toast(message, "err"); return; }
+  let box = open.querySelector(".dialog-error");
+  if (!box) {
+    box = document.createElement("p");
+    box.className = "dialog-error";
+    const actions = open.querySelector(".dialog-actions");
+    if (actions) open.insertBefore(box, actions);
+    else open.appendChild(box);
+  }
+  box.textContent = message;
+  box.style.display = "block";
+}
+function clearDialogError(dialog) {
+  const box = dialog && dialog.querySelector(".dialog-error");
+  if (box) { box.textContent = ""; box.style.display = "none"; }
+}
 async function fetchJSON(url, opt = {}) {
   const method = opt.method || "GET";
   const headers = { "Content-Type": "application/json", ...(opt.headers || {}) };
@@ -67,7 +87,14 @@ async function fetchJSON(url, opt = {}) {
   }
   if (!r.ok) {
     let detail = r.statusText;
-    try { detail = (await r.json()).detail || detail; } catch (e) { detail = await r.text() || detail; }
+    try {
+      detail = (await r.json()).detail || detail;
+    } catch (e) {
+      // r.json() が失敗した場合、既にストリームを消費している可能性がある。
+      // そのまま r.text() を呼ぶと "body stream already read" になるため、
+      // 元の response を clone してから読み取る。
+      try { detail = await r.clone().text(); } catch (e2) { detail = String(e); }
+    }
     throw new Error(`HTTP ${r.status}: ${detail}`);
   }
   return r.json();
@@ -146,21 +173,20 @@ async function loadAgentCredentials() {
   if (!tb) return;
   try {
     const data = await fetchJSON(API + "/agent-credentials");
-    tb.innerHTML = (data.credentials || []).map((c) => `<tr><td>${esc(c.name)}</td><td>${esc(c.server_id)}</td><td><code>${esc(c.agent_token_id)}</code></td><td>${c.active ? '<span class="badge badge-enabled">有効</span>' : '<span class="badge badge-revoked">無効</span>'}</td><td>${c.active ? `<button class="btn danger" data-access-action="revoke-agent" data-id="${esc(c.id)}" type="button">失効</button>` : ""}</td></tr>`).join("") || '<tr><td colspan="5" class="loading">0 credentials</td></tr>';
+    tb.innerHTML = (data.credentials || []).map((c) => `<tr><td>${esc(c.name)}</td><td>${esc(c.server_id)}</td><td><code>${esc(c.agent_token_id)}</code></td><td>${c.active ? '<span class="badge badge-enabled">有効</span>' : '<span class="badge badge-revoked">無効</span>'}</td><td>${c.active ? `<button class="btn danger" data-access-action="revoke-agent" data-id="${esc(c.id)}" type="button">失効</button> ` : ""}<button class="btn danger-outline" data-access-action="delete-agent" data-id="${esc(c.id)}" type="button">削除</button></td></tr>`).join("") || '<tr><td colspan="5" class="loading">0 credentials</td></tr>';
   } catch (e) { tb.innerHTML = `<tr><td colspan="5" class="loading">${esc(e.message)}</td></tr>`; }
-}
-async function registerAgentCredential(e) {
-  e.preventDefault();
-  try {
-    await fetchJSON(API + "/agent-credentials", { method: "POST", body: JSON.stringify({ server_id: $("#agent-server-id").value.trim(), name: $("#agent-credential-name").value.trim(), agent_token_id: $("#agent-token-id").value.trim(), token: $("#agent-token").value }) });
-    e.target.reset(); toast("Agent credentialを登録しました", "ok"); loadAgentCredentials();
-  } catch (err) { toast(err.message, "err"); }
 }
 function revokeAgentCredential(id) {
   confirmAction("Agent credential失効", "Agent側にも失効を同期します。続行しますか。", async () => {
     try { await fetchJSON(API + `/agent-credentials/${encodeURIComponent(id)}/revoke`, { method: "POST" }); toast("失効しました", "ok"); loadAgentCredentials(); }
     catch (e) { toast(e.message, "err"); }
   }, "Revoke");
+}
+function deleteAgentCredential(id) {
+  confirmAction("Agent credential削除", "このAgent credentialを完全に削除します。取り消せません。続行しますか。", async () => {
+    try { await fetchJSON(API + `/agent-credentials/${encodeURIComponent(id)}`, { method: "DELETE" }); toast("削除しました", "ok"); loadAgentCredentials(); }
+    catch (e) { toast(e.message, "err"); }
+  }, "Delete");
 }
 
 /* ---- nodes ---- */
@@ -219,8 +245,26 @@ function tokenRowHtml(t) {
     <td>${stateBadge}</td><td>${btn}</td>`;
 }
 
+/* ---- token detail (row click -> reveal dialog) ---- */
+async function openTokenDetail(id) {
+  const t = state.tokens.find((x) => x.id === id);
+  if (!t) return;
+  $("#token-detail-title").textContent = `Token Detail: ${t.name || t.id}`;
+  $("#token-detail-meta").textContent = `Token ID: ${t.id} / Prefix: ${t.prefix} / Scope: ${t.scope} / Servers: ${(t.server_ids || []).join(", ") || "-"}`;
+  $("#token-detail-raw").textContent = "Loading...";
+  $("#token-detail-dialog").showModal();
+  try {
+    const r = await fetchJSON(API + `/tokens/${encodeURIComponent(id)}/reveal`);
+    $("#token-detail-raw").textContent = r.token;
+  } catch (e) {
+    $("#token-detail-raw").textContent = `取得に失敗しました: ${e.message}`;
+    toast(e.message, "err");
+  }
+}
+
 /* ---- dialogs ---- */
 function openIssueDialog() {
+  clearDialogError($("#token-dialog"));
   $("#t-name").value = "";
   $("#t-scope").value = "readonly";
   $("#t-exp").value = "";
@@ -257,7 +301,7 @@ function submitIssue(e) {
   const payload = { name, scope, server_ids: servers, expires_in_days: exp ? Number(exp) : null };
   fetchJSON(API + "/tokens", { method: "POST", body: JSON.stringify(payload) })
     .then((r) => showTokenResult(r.token, r.record))
-    .catch((e) => { toast(e.message, "err"); $("#token-dialog").close(); });
+    .catch((e) => { dialogError(e.message); });
 }
 function showTokenResult(raw, rec) {
   $("#token-dialog").close();
@@ -300,16 +344,24 @@ function renderHelp() {
   const isWildcard = ["0.0.0.0", "::", ""].includes(host);
   const isLoopback = ["127.0.0.1", "localhost", "::1"].includes(host);
   const displayHost = (isWildcard || isLoopback) && browserHost ? browserHost : host;
-  const httpLine = mcp.http_enabled
-    ? `      // MCP-over-HTTP: http://${displayHost}:${port}${path}`
-    : "";
+  const stdioTokenEnv = mcp.stdio_token_env || "LINUX_MCP_TOKEN";
+  const httpLines = mcp.http_enabled
+    ? [
+        `      // MCP-over-HTTP: http://${displayHost}:${port}${path}`,
+        '      //   認証ヘッダー: "Authorization: Bearer <MCPトークン生値>"',
+      ]
+    : [];
   const lines = [
     "{",
     '  "mcpServers": {',
     '    "linux-remote-management": {',
     '      "command": "python -m app.mcp_entry",',
-    '      "cwd": "/path/to/mcp-server"',
-    httpLine,
+    '      "cwd": "/path/to/mcp-server",',
+    '      "env": {',
+    `        // ${stdioTokenEnv}: トークン発行画面で発行したMCPトークンの生値 (表示は一度のみ)`,
+    `        "${stdioTokenEnv}": "<MCPトークン生値>",`,
+    "      },",
+    ...httpLines,
     "    }",
     "  }",
     "}",
@@ -386,6 +438,7 @@ async function doApproveAction(action, id) {
 
 /* ---- add node ---- */
 function openAddNodeDialog() {
+  clearDialogError($("#add-node-dialog"));
   $("#n-id").value = "";
   $("#n-name").value = "";
   $("#n-url").value = "";
@@ -429,7 +482,7 @@ $("#add-node-form").onsubmit = async (e) => {
     loadNodes();
     loadTokens();
   } catch (err) {
-    toast(err.message, "err");
+    dialogError(err.message);
   }
 };
 
@@ -490,10 +543,9 @@ async function init() {
     if (!serverId) { toast("Server IDを入力してください", "err"); return; }
     fetchJSON(API + `/principals/${encodeURIComponent(id)}/permissions`, { method: "POST", body: JSON.stringify({ server_id: serverId, scope }) })
       .then(() => { toast("権限を付与しました", "ok"); loadPrincipals(); $("#grant-dialog").close(); })
-      .catch((e) => toast(e.message, "err"));
+      .catch((e) => dialogError(e.message));
   };
   $("#g-cancel").onclick = () => $("#grant-dialog").close();
-  $("#agent-credential-form").onsubmit = registerAgentCredential;
   $("#principals-tbody").addEventListener("click", (e) => {
     const btn = e.target.closest("button[data-access-action]");
     if (!btn) return;
@@ -501,8 +553,10 @@ async function init() {
     if (btn.dataset.accessAction === "disable-principal") disablePrincipal(btn.dataset.id);
   });
   $("#agent-credentials-tbody").addEventListener("click", (e) => {
-    const btn = e.target.closest("button[data-access-action=\"revoke-agent\"]");
-    if (btn) revokeAgentCredential(btn.dataset.id);
+    const btn = e.target.closest("button[data-access-action]");
+    if (!btn) return;
+    if (btn.dataset.accessAction === "revoke-agent") revokeAgentCredential(btn.dataset.id);
+    if (btn.dataset.accessAction === "delete-agent") deleteAgentCredential(btn.dataset.id);
   });
   $("#auto-reload").onchange = (e) => { state.auto = e.target.checked; };
   $("#issue-form").onsubmit = submitIssue;
@@ -513,11 +567,24 @@ async function init() {
   $("#close-result").onclick = () => $("#token-result").close();
   $("#tokens-tbody").addEventListener("click", (e) => {
     const btn = e.target.closest("button[data-action]");
-    if (!btn) return;
-    const id = btn.dataset.id;
-    if (btn.dataset.action === "revoke") doRevoke(id);
-    else if (btn.dataset.action === "delete") doDelete(id);
+    if (btn) {
+      const id = btn.dataset.id;
+      if (btn.dataset.action === "revoke") doRevoke(id);
+      else if (btn.dataset.action === "delete") doDelete(id);
+      return;
+    }
+    const row = e.target.closest("tr");
+    if (!row) return;
+    const idCell = row.querySelector("td:nth-child(2)");
+    if (idCell && state.tokens.some((t) => t.id === idCell.textContent.trim())) {
+      openTokenDetail(idCell.textContent.trim());
+    }
   });
+  $("#token-detail-copy").addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText($("#token-detail-raw").textContent); toast("クリップボードにコピーしました", "ok"); }
+    catch (e) { toast("コピー失敗: " + e, "err"); }
+  });
+  $("#token-detail-close").onclick = () => $("#token-detail-dialog").close();
   await Promise.all([
     loadNodes().catch((e) => toast("Nodes load error: " + e.message, "err")),
     loadTokens().catch((e) => toast("Tokens load error: " + e.message, "err")),

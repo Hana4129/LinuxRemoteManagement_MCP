@@ -18,6 +18,7 @@
 - POST /api/agent-credentials/{id}/revoke  失効 (Agent失効同期つき)
 - POST /api/agent-credentials/{id}/rotate  ローテーション (グラ期間つき)
 - GET  /api/agent-credentials/{id}/rotations  ローテーション履歴
+- DEL  /api/agent-credentials/{id}          削除（取り消し不可）
 - POST /api/agent-credentials/cleanup-grace-periods  グラ期間経過credential一括無効化
 """
 
@@ -130,7 +131,10 @@ class AgentCredentialCreateRequest(BaseModel):
     server_id: str = Field(..., min_length=1, max_length=100)
     name: str = Field(..., min_length=1, max_length=100)
     token: str = Field(..., min_length=1, description="Agent側に設定済みのBearer token")
-    agent_token_id: str = Field(..., min_length=1, max_length=100, description="Agent設定内のtoken id")
+    agent_token_id: str = Field(
+        default="", max_length=100,
+        description="Agent設定内のtoken id。省略時はAgentに問い合わせてname一致で自動解決する",
+    )
     expires_in_days: int | None = Field(default=None, ge=1, le=3650)
 
 
@@ -139,7 +143,10 @@ class AgentCredentialGenerateRequest(BaseModel):
 
     server_id: str = Field(..., min_length=1, max_length=100)
     name: str = Field(..., min_length=1, max_length=100)
-    agent_token_id: str = Field(..., min_length=1, max_length=100, description="Agent設定内のtoken id")
+    agent_token_id: str = Field(
+        default="", max_length=100,
+        description="Agent設定内のtoken id。省略時はAgentに問い合わせてname一致で自動解決する",
+    )
     expires_in_days: int | None = Field(default=None, ge=1, le=3650)
 
 
@@ -218,6 +225,7 @@ def get_meta(request: Request) -> dict[str, Any]:
             "http_path": cfg.mcp.path,
             "stdio_entry": "python -m app.mcp_entry",
             "http_entry": "python -m app.mcp_http_entry",
+            "stdio_token_env": cfg.mcp.stdio_token_env,
         },
         "token_store": str(cfg.data_dir / "tokens.db"),
     }
@@ -272,6 +280,31 @@ def list_tokens(request: Request) -> dict[str, Any]:
     store: TokenStore = request.app.state.store
     records = store.list_tokens()
     return {"tokens": [t.to_dict() for t in records]}
+
+
+@tokens_router.get("/{token_id}/reveal")
+def reveal_token(request: Request, token_id: str) -> dict[str, Any]:
+    """生トークンを再表示する (admin限定・監査ログ記録)。
+
+    発行時の「一度だけ表示」ポリシーに対する例外的な解放。管理者がUIから
+    発行済みトークンを確認できるようにするための機能で、アクセスのたびに
+    監査ログへ記録される。権限は `_require_admin` で制限する。
+    """
+    _require_admin(request)
+    store: TokenStore = request.app.state.store
+    record = store.get_token(token_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"トークンが見つかりません: {token_id}")
+    raw = store.get_token_raw(token_id)
+    if not raw:
+        raise HTTPException(status_code=404, detail=f"生トークンが復号できません: {token_id}")
+    _audit_management(
+        request,
+        "reveal_token",
+        {"token_id": token_id, "name": record.name, "prefix": record.prefix},
+        ok=True,
+    )
+    return {"id": record.id, "name": record.name, "prefix": record.prefix, "token": raw}
 
 
 @tokens_router.post("")
@@ -360,17 +393,86 @@ def disable_principal(request: Request, principal_id: str) -> dict[str, Any]:
     return {"disabled": disabled, "principal_id": principal_id}
 
 
+def _resolve_agent_token_id(request: Request, server: ServerConfig, name: str) -> str:
+    """Agentにトークン一覧を問い合わせ、name一致でagent_token_idを自動解決する。
+
+    Console登録時にagent_token_idの手入力を不要にするための補助。
+    - 一致するnameが1つだけならそのidを返す
+    - 見つからない/複数一致/Agent不通の場合は400で候補を返す
+    (fail-closed: 曖昧なままidを推測して保存しない)
+    """
+    import httpx
+
+    from app.config import _build_agent_ssl_context
+
+    cfg = request.app.state.config
+    if not cfg.agent.admin_token:
+        raise HTTPException(
+            status_code=400,
+            detail="agent_token_idの自動解決にはAgent管理トークン (agent.admin_token) の設定が必要です。agent_token_idを明示指定してください",
+        )
+    ssl_context = _build_agent_ssl_context(
+        cfg.agent.tls_verify,
+        client_cert=cfg.agent.client_cert,
+        client_key=cfg.agent.client_key,
+    )
+    try:
+        response = httpx.get(
+            server.url.rstrip("/") + "/v1/admin/tokens/",
+            headers={"X-LRM-Admin-Token": cfg.agent.admin_token},
+            verify=ssl_context,
+            timeout=cfg.agent.timeout_seconds,
+        )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"agent_token_id自動解決のためAgent一覧取得に失敗しました: {exc}。agent_token_idを明示指定してください",
+        ) from exc
+    if response.status_code != 200:
+        raise HTTPException(
+            status_code=400,
+            detail=f"agent_token_id自動解決のためAgent一覧取得に失敗しました (HTTP {response.status_code})。agent_token_idを明示指定してください",
+        )
+    candidates = []
+    try:
+        candidates = [
+            entry for entry in response.json().get("tokens", [])
+            if isinstance(entry, dict) and entry.get("name") == name
+        ]
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Agent一覧の応答解析に失敗しました: {exc}。agent_token_idを明示指定してください",
+        ) from exc
+    if len(candidates) == 1:
+        return str(candidates[0].get("id", ""))
+    if not candidates:
+        available = sorted({str(e.get("name", "")) for e in response.json().get("tokens", []) if isinstance(e, dict)})
+        raise HTTPException(
+            status_code=400,
+            detail=f"Agent上にname一致するtokenがありません: {name} (Agent側name一覧: {available})。agent_token_idを明示指定してください",
+        )
+    ids = sorted(str(e.get("id", "")) for e in candidates)
+    raise HTTPException(
+        status_code=400,
+        detail=f"Agent上にname一致するtokenが複数あります: {name} (候補id: {ids})。agent_token_idを明示指定してください",
+    )
+
+
 @agent_credentials_router.post("")
 def register_agent_credential(request: Request, payload: AgentCredentialCreateRequest) -> dict[str, Any]:
     _require_admin(request)
-    _server_or_404(request, payload.server_id)
+    server = _server_or_404(request, payload.server_id)
     store: TokenStore = request.app.state.store
     token = _resolve_agent_token(payload.token)
+    agent_token_id = payload.agent_token_id
+    if not agent_token_id:
+        agent_token_id = _resolve_agent_token_id(request, server, payload.name)
     credential = store.create_agent_credential(
         payload.server_id, payload.name, token, expires_in_days=payload.expires_in_days
-        , agent_token_id=payload.agent_token_id
+        , agent_token_id=agent_token_id
     )
-    _audit_management(request, "register_agent_credential", {"credential_id": credential.id, "server_id": payload.server_id, "agent_token_id": payload.agent_token_id})
+    _audit_management(request, "register_agent_credential", {"credential_id": credential.id, "server_id": payload.server_id, "agent_token_id": agent_token_id})
     return {"credential": credential.to_dict()}
 
 
@@ -382,18 +484,21 @@ def generate_agent_credential(request: Request, payload: AgentCredentialGenerate
     Agent側のconfig.ymlへ配布する。一覧には生値を再表示しない。
     """
     _require_admin(request)
-    _server_or_404(request, payload.server_id)
+    server = _server_or_404(request, payload.server_id)
     store: TokenStore = request.app.state.store
+    agent_token_id = payload.agent_token_id
+    if not agent_token_id:
+        agent_token_id = _resolve_agent_token_id(request, server, payload.name)
     credential, raw = store.generate_agent_credential(
         server_id=payload.server_id,
         name=payload.name,
-        agent_token_id=payload.agent_token_id,
+        agent_token_id=agent_token_id,
         expires_in_days=payload.expires_in_days,
     )
     _audit_management(
         request,
         "generate_agent_credential",
-        {"credential_id": credential.id, "server_id": payload.server_id, "agent_token_id": payload.agent_token_id},
+        {"credential_id": credential.id, "server_id": payload.server_id, "agent_token_id": agent_token_id},
     )
     return {"credential": credential.to_dict(), "token": raw}
 
@@ -609,6 +714,17 @@ def get_agent_credential_rotation_history(request: Request, credential_id: str) 
     if store.get_agent_credential(credential_id) is None:
         raise HTTPException(status_code=404, detail=f"Agent credentialが見つかりません: {credential_id}")
     return {"credential_id": credential_id, "rotations": store.get_agent_credential_rotations(credential_id)}
+
+
+@agent_credentials_router.delete("/{credential_id}")
+def delete_agent_credential(request: Request, credential_id: str) -> dict[str, Any]:
+    """Agent credentialを削除する（取り消し不可）。"""
+    _require_admin(request)
+    store: TokenStore = request.app.state.store
+    if not store.delete_agent_credential(credential_id):
+        raise HTTPException(status_code=404, detail=f"Agent credentialが見つかりません: {credential_id}")
+    _audit_management(request, "delete_agent_credential", {"credential_id": credential_id})
+    return {"deleted": True}
 
 
 @agent_credentials_router.post("/cleanup-grace-periods")

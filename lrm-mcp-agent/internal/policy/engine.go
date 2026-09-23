@@ -47,6 +47,15 @@ func (e *Engine) AddToken(p TokenPolicy) {
 	e.byToken[p.ID] = &p
 }
 
+// ListTokens は登録済み全トークンのポリシーを返す (hash等の秘密値は含まない)。
+func (e *Engine) ListTokens() []*TokenPolicy {
+	tokens := make([]*TokenPolicy, 0, len(e.byToken))
+	for _, tp := range e.byToken {
+		tokens = append(tokens, tp)
+	}
+	return tokens
+}
+
 func (e *Engine) GetToken(id string) *TokenPolicy {
 	return e.byToken[id]
 }

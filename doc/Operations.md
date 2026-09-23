@@ -136,23 +136,50 @@ curl -X DELETE http://localhost:8080/api/tokens/{token_id}
 ### 2.4 Agent credentialの生成・ローテーション
 
 Agent credential (MCP Server が各Agentへ認証するためのBearer token) は、
-生値を手入力せずサーバー側で生成する方式を標準とする。
+**Agent側のCLIツール (`credential-issue`) で発行し、生値をConsoleへ一度だけ提出する**方式を標準とする。
+発行主体がAgent側にあるため、生値がConsoleのレスポンスやログを経由せず、
+Agentのconfig.ymlへ直接反映される。
 
-#### 発行 (標準フロー: サーバー側生成)
+#### 発行 (標準フロー: Agent側発行)
 
 ```bash
-# credentialをサーバー側で生成する (生tokenはレスポンスに一度だけ返る)
-curl -X POST http://localhost:8080/api/agent-credentials/generate \
-  -H "Content-Type: application/json" \
-  -d '{"server_id": "web01", "name": "web01-agent", "agent_token_id": "web01-primary"}'
+# Agentホスト上で実行 (-apply でconfig.ymlへ自動追記 / .bak退避)
+./credential-issue -name web01-agent -scope operator -config /etc/lrm-mcp-agent/config.yml -apply
 ```
 
-返された `token` の生値をAgent側の `config.yml` の該当token idへ配布し、
-Agentを再読み込みする。生値は一覧APIに再表示されないため、
-この時点でパスワードマネージャ等へ保管すること。
+- CSPRNGで生トークンを生成し、SHA-256 hashをconfig.ymlの `tokens:` へ追記する
+  (token idはデフォルトで `credential-<name>`)
+- config watcherが有効なら5秒以内にAgentへ自動反映される
+- 標準出力に **生トークンとConsole登録用のcurlコマンドが一度だけ表示される**
 
-(代替フロー) Agent側で生成済みのtokenを登録する場合は
-`POST /api/agent-credentials` を使用する。
+表示されたcurlコマンドを実行してConsoleへ登録する (`server_id` はConsole側の
+サーバーIDを指定):
+
+```bash
+curl -X POST https://<mcp-server>/api/agent-credentials \
+  -H "Content-Type: application/json" \
+  -d '{"server_id": "web01", "name": "web01-agent", "token": "lra_..."}'
+```
+
+- `agent_token_id` は省略可能: ConsoleがAgentに `GET /v1/admin/tokens/` で問い合わせ、
+  **name一致するtokenのidを自動解決する** (Agent側発行のnameとConsole登録のnameを
+  一致させれば指定不要)
+- 生値はConsoleの `data_dir/tokens.db` へ AES-256-GCM で暗号化して保存される
+  (MCP Server がAgentへのアウトバウンド認証のBearerとして使用するため生値が必要)
+- 生値はレスポンス・ログ・一覧APIに再表示されない
+
+`-apply` を付けずに実行した場合は config.yml は更新されず、
+手動追記用のスニペットが表示される。
+
+`agent_token_id` 自動解決の注意点:
+
+- Consoleの `agent.admin_token` 設定が必須 (未設定時は400で案内される)
+- Agent側config.yml内でnameが一意でないと解決できず400で候補idが返る
+- Agentが停止中など一覧取得に失敗した場合も400になるため、
+  その場合のみ `agent_token_id` を明示指定する (fail-closed)
+
+(代替フロー) Console側で生成する `POST /api/agent-credentials/generate` も
+引き続き利用可能。生成した生値をAgentのconfig.ymlへ手動配布する。
 
 #### 環境変数からの参照登録 (Secret Manager連携)
 
@@ -163,9 +190,10 @@ credential を登録できる。
 
 ```bash
 # 例: LRM_AGENT_TOKEN_WEB01 環境変数に生トークンが設定済みの場合
+# (agent_token_id省略時はAgentへ問い合わせてname一致で自動解決)
 curl -X POST http://localhost:8080/api/agent-credentials \
   -H "Content-Type: application/json" \
-  -d '{"server_id": "web01", "name": "web01-agent", "token": "env:LRM_AGENT_TOKEN_WEB01", "agent_token_id": "web01-primary"}'
+  -d '{"server_id": "web01", "name": "web01-agent", "token": "env:LRM_AGENT_TOKEN_WEB01"}'
 ```
 
 - 環境変数が未設定・空の場合は `400` で拒否される

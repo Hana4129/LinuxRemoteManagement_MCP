@@ -91,6 +91,7 @@ python -m app.mcp_http_entry
 
 ### MCP トークン管理
 - **発行**: `POST /api/tokens` — 生トークンを一度だけ返す
+- **再表示**: `GET /api/tokens/{id}/reveal` — 管理Consoleのトークン一覧から行クリックで生トークンを再表示 (admin限定、アクセスごとに監査ログ記録)
 - **登録**: `POST /api/tokens/import` — 外部で発行済みトークンを登録
 - **失効**: `POST /api/tokens/{id}/revoke` — 即座に Agent 認証無効化
 - **削除**: `DELETE /api/tokens/{id}`
@@ -107,6 +108,7 @@ python -m app.mcp_http_entry
 | GET | `/api/nodes/{id}/processes` | プロセス一覧 |
 | GET | `/api/tokens` | トークン一覧 (生値非表示) |
 | POST | `/api/tokens` | トークン発行 (生値一度だけ返す) |
+| GET | `/api/tokens/{id}/reveal` | 生トークン再表示 (admin限定・監査ログ記録) |
 | POST | `/api/tokens/import` | 外部発行トークン登録 |
 | POST | `/api/tokens/{id}/revoke` | トークン失効 |
 | DELETE | `/api/tokens/{id}` | トークン削除 |

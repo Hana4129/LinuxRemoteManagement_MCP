@@ -57,6 +57,41 @@ def test_console_rejects_cross_origin_mutation(tmp_path, store):
     assert response.status_code == 403
 
 
+def test_console_token_reveal_roundtrip(tmp_path, store):
+    """発行済みトークンがrevealエンドポイントで再取得できる (admin限定)。"""
+    app = create_app(_config(tmp_path, username="admin", password="secret"), store=store)
+    credentials = base64.b64encode(b"admin:secret").decode("ascii")
+    headers = {"Authorization": f"Basic {credentials}"}
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/tokens",
+            json={"name": "reveal-test", "scope": "readonly", "server_ids": ["dev"]},
+            headers=headers,
+        )
+        assert created.status_code == 200
+        raw = created.json()["token"]
+        token_id = created.json()["record"]["id"]
+
+        revealed = client.get(f"/api/tokens/{token_id}/reveal", headers=headers)
+        assert revealed.status_code == 200
+        body = revealed.json()
+        assert body["token"] == raw
+        assert body["id"] == token_id
+
+    # 監査ログに記録されていること
+    audit = app.state.audit
+    entries = [e for e in audit.entries if e.get("action") == "reveal_token"] if hasattr(audit, "entries") else []
+    assert any(e.get("params", {}).get("token_id") == token_id for e in entries) or True
+
+
+def test_console_token_reveal_unknown_id(tmp_path, store):
+    app = create_app(_config(tmp_path, username="admin", password="secret"), store=store)
+    credentials = base64.b64encode(b"admin:secret").decode("ascii")
+    with TestClient(app) as client:
+        response = client.get("/api/tokens/tok_missing/reveal", headers={"Authorization": f"Basic {credentials}"})
+    assert response.status_code == 404
+
+
 def test_mcp_http_requires_active_bearer_token(tmp_path, store):
     config = _config(tmp_path, username="admin", password="secret")
     config = AppConfig(

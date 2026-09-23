@@ -14,7 +14,8 @@ services:
     volumes:
       - ./mcp-server/data:/app/data
       - ./mcp-server/certs:/app/certs:ro
-      - ./mcp-server/config.docker.yml:/app/config.docker.yml:ro
+      # Node登録/削除 (delete_server / add server) はconfigへの書き込みを伴うため RW でマウントする
+      - ./mcp-server/config.docker.yml:/app/config.docker.yml
     environment:
       - MCP_CONFIG_FILE=/app/config.docker.yml
       - LINUX_MCP_CONSOLE_USER=${LINUX_MCP_CONSOLE_USER:-admin}

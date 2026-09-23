@@ -335,12 +335,22 @@ def create_app(config: AppConfig | None = None, store: TokenStore | None = None)
 
     templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
+    # app.js の内容ハッシュでキャッシュバスティングする
+    # (パッケージバージョンはビルド間で不変なため、イメージ更新後も古い JS が
+    #  ブラウザキャッシュから使われる問題を防ぐ)
+    import hashlib
+
+    app_js_path = BASE_DIR / "static" / "app.js"
+    app_js_version = hashlib.sha256(app_js_path.read_bytes()).hexdigest()[:12]
+
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)
     async def index(request: Request):
+        # HTML は常に再検証させる (古いHTMLが古い app.js URL を参照し続けるのを防ぐ)
         return templates.TemplateResponse(
             request=request,
             name="index.html",
-            context={"version": __version__, "mcp_http_enabled": app.state.mcp_http_enabled},
+            context={"version": app_js_version, "mcp_http_enabled": app.state.mcp_http_enabled},
+            headers={"Cache-Control": "no-cache"},
         )
 
     app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")

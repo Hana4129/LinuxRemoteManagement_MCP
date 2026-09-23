@@ -202,13 +202,17 @@ func (a *Agent) Handler() http.Handler {
 	mux.HandleFunc("/v1/services/", a.handleServices)
 	mux.HandleFunc("/v1/files", a.handleFiles)
 	mux.HandleFunc("/v1/execute", a.handleExecute)
-	mux.HandleFunc("/v1/admin/tokens/", a.handleAdminToken)
+	mux.HandleFunc("/v1/admin/tokens/", a.handleAdminTokens)
+	mux.HandleFunc("/v1/admin/tokens", a.handleAdminTokens)
 	mux.HandleFunc("/metrics", handleMetrics)
 	return a.middlewareStack(mux)
 }
 
-func (a *Agent) handleAdminToken(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost || a.cfg.Agent.AdminTokenHash == "" {
+func (a *Agent) handleAdminTokens(w http.ResponseWriter, r *http.Request) {
+	// GET /v1/admin/tokens      : トークン一覧 (id/name/scope/disabledのみ)
+	// POST /v1/admin/tokens/{id}/revoke : トークン失効
+	// いずれも AdminTokenHash 設定時のみ有効で、X-LRM-Admin-Token で認証する。
+	if a.cfg.Agent.AdminTokenHash == "" {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 		return
 	}
@@ -218,6 +222,36 @@ func (a *Agent) handleAdminToken(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 		return
 	}
+	if r.Method == http.MethodGet && (r.URL.Path == "/v1/admin/tokens" || r.URL.Path == "/v1/admin/tokens/") {
+		a.handleListTokens(w, r)
+		return
+	}
+	if r.Method == http.MethodPost {
+		a.handleAdminTokenRevoke(w, r)
+		return
+	}
+	writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+}
+
+// handleListTokens はトークン一覧を返す。hash等の秘密値は含まない。
+// Console側のagent_token_id自動解決 (name -> id) 用。
+func (a *Agent) handleListTokens(w http.ResponseWriter, r *http.Request) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	tokens := make([]map[string]interface{}, 0, len(a.tokens))
+	for _, tp := range a.engine.ListTokens() {
+		tokens = append(tokens, map[string]interface{}{
+			"id":       tp.ID,
+			"name":     tp.Name,
+			"scope":    string(tp.Scope),
+			"disabled": tp.Disabled,
+		})
+	}
+	a.auditLog.Log("admin", "token_list", r.URL.Path, "ok", "", clientIP(r))
+	writeJSON(w, http.StatusOK, map[string]interface{}{"tokens": tokens})
+}
+
+func (a *Agent) handleAdminTokenRevoke(w http.ResponseWriter, r *http.Request) {
 	tokenID := strings.TrimPrefix(r.URL.Path, "/v1/admin/tokens/")
 	tokenID = strings.TrimSuffix(tokenID, "/revoke")
 	if tokenID == "" {
@@ -252,7 +286,7 @@ func (a *Agent) middlewareStack(h http.Handler) http.Handler {
 			h.ServeHTTP(w, r)
 			return
 		}
-		if strings.HasPrefix(r.URL.Path, "/v1/admin/tokens/") {
+		if strings.HasPrefix(r.URL.Path, "/v1/admin/tokens/") || r.URL.Path == "/v1/admin/tokens" {
 			h.ServeHTTP(w, r)
 			return
 		}

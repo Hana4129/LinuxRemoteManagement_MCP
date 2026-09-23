@@ -86,6 +86,23 @@ See `config.yml` for example configuration.
 python3 -c "import hashlib; print(hashlib.sha256(b'your-raw-token').hexdigest())"
 ```
 
+### Agent-side Credential Issuance (credential-issue)
+
+MCP Server用credentialをAgent側で発行する標準CLI。CSPRNGで生トークンを生成し、
+SHA-256 hashをconfig.ymlへ追記 (-apply) した上で、生トークンとConsole登録用の
+curlコマンドを一度だけ表示する。
+
+```bash
+go run ./cmd/gen-token -name web01-agent -scope operator -config config.yml -apply
+# ビルド済みバイナリの場合: ./credential-issue -name web01-agent -scope operator -config config.yml -apply
+```
+
+- `-name` はConsole側のcredential nameと一致させる (一致すれば `agent_token_id` は自動解決される)
+- `-apply` 未指定の場合はconfig.ymlを更新せず、スニペット表示のみ
+- token idの重複時はエラーで終了する (.bak退避は冪等)
+
+詳細は `doc/Operations.md` の「Agent credentialの生成・ローテーション」を参照。
+
 ## Deployment
 
 ### systemd

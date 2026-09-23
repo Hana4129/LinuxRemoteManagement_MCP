@@ -65,14 +65,7 @@
       </div>
       <div class="help-card access-card">
         <h2>Agent credentials</h2>
-        <p class="hint">Agent credentials are service credentials, separate from user MCP tokens. The raw value is submitted once and never displayed.</p>
-        <form id="agent-credential-form" class="inline-form">
-          <input id="agent-server-id" placeholder="Server ID" required>
-          <input id="agent-credential-name" placeholder="Credential name" required>
-          <input id="agent-token-id" placeholder="Agent token ID" required>
-          <input id="agent-token" type="password" placeholder="Agent token" required>
-          <button class="btn primary" type="submit">Register</button>
-        </form>
+        <p class="hint">Agent credentials are service credentials, separate from user MCP tokens. Registration is done from the Agent host (<code>credential-issue</code> CLI + one-time submission). See doc/Operations.md.</p>
         <div class="table-wrap compact"><table><thead><tr><th>Name</th><th>Server</th><th>Agent token ID</th><th>Status</th><th>Actions</th></tr></thead><tbody id="agent-credentials-tbody"><tr><td colspan="5" class="loading">Loading...</td></tr></tbody></table></div>
       </div>
     </section>
@@ -239,6 +232,7 @@
       <div class="dialog-actions"><button type="button" class="btn" id="g-cancel">Cancel</button><button type="submit" class="btn primary">Grant</button></div>
     </form>
   </dialog>
+  <dialog id="token-result" class="dialog">
     <div class="result">
       <h2>Token Issued</h2>
       <p class="hint">Save this token safely. It won't be shown again after you close this dialog.</p>
@@ -246,6 +240,17 @@
       <div class="dialog-actions">
         <button id="copy-token" class="btn primary" type="button">Copy</button>
         <button id="close-result" class="btn" type="button">Close</button>
+      </div>
+    </div>
+  </dialog>
+  <dialog id="token-detail-dialog" class="dialog">
+    <div class="result">
+      <h2 id="token-detail-title">Token Detail</h2>
+      <p class="hint" id="token-detail-meta"></p>
+      <pre id="token-detail-raw" class="token-box"></pre>
+      <div class="dialog-actions">
+        <button id="token-detail-copy" class="btn primary" type="button">Copy</button>
+        <button id="token-detail-close" class="btn" type="button">Close</button>
       </div>
     </div>
   </dialog>

@@ -365,6 +365,8 @@ Tool呼び出しごとに、対象serverと操作がpermissionに含まれるこ
 
 Agent credentialの失効時は、MCP ServerがAgentの `POST /v1/admin/tokens/{agent_token_id}/revoke` を呼び出す。Agentは通常のBearer tokenとは別の管理secretと、可能な構成ではmTLSクライアント証明書を要求する。Agent側で無効化されたtokenは、設定ファイルの次回reloadを待たずに認証拒否される。同期に失敗した場合、MCP Server側のcredentialも失効済みとせず、運用者へエラーを返す。
 
+Agent credentialの登録時、`agent_token_id` は省略可能である。省略時、MCP ServerはAgentの `GET /v1/admin/tokens/` (同じ管理secretで認証、hash等の秘密値は返さない) を呼び出し、credentialの `name` と一致するtokenのidを自動解決する。一致が0件・複数件、またはAgent不通の場合は登録を拒否し (400)、運用者へ候補とともに明示指定を促す (fail-closed)。
+
 管理ツールは、管理権限を持つprincipalだけがpermissionのgrant/revokeを実行できるようにする。revokeは新規Tool呼び出しを即時拒否し、Agent側のcredentialにも短い有効期限、失効リストの同期、またはintrospectionによって反映する。
 
 承認要求にはリクエストしたprincipalを保存し、承認APIはリクエスト本文の任意の文字列を承認者名として信用しない。承認者は管理コンソールで認証されたprincipalから決定する。

@@ -197,6 +197,36 @@ paths:
         '201':
           description: 登録成功
 
+  /api/agent-credentials/{credential_id}/revoke:
+    post:
+      tags: [agent-credentials]
+      summary: Agent credential失効
+      parameters:
+        - name: credential_id
+          in: path
+          required: true
+          schema:
+            type: string
+      operationId: revokeAgentCredential
+      responses:
+        '200':
+          description: 失効成功
+
+  /api/agent-credentials/{credential_id}:
+    delete:
+      tags: [agent-credentials]
+      summary: Agent credential削除
+      parameters:
+        - name: credential_id
+          in: path
+          required: true
+          schema:
+            type: string
+      operationId: deleteAgentCredential
+      responses:
+        '200':
+          description: 削除成功
+
   /api/agent-credentials/generate:
 
 components:
