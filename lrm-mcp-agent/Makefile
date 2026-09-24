@@ -7,6 +7,7 @@ CONFIG=config.yml
 build:
 	go mod tidy
 	go build -o $(BINARY) $(CMD)
+	go build -o credential-issue ./cmd/gen-token
 
 run: build
 	./$(BINARY) --config $(CONFIG)
@@ -16,6 +17,7 @@ test:
 
 clean:
 	rm -f $(BINARY)
+	rm -f credential-issue
 	rm -rf data/
 
 docker:

@@ -1,6 +1,14 @@
 bin/
 data/
 tmp/
+# make build で生成されるバイナリ
+/lrm-mcp-agent
+/credential-issue
+# credential-issue / setup.sh --provision が生成するバックアップ・一時ファイル
+# (registration.json は生トークンを含むため、誤コミットを防ぐ)
+config.yml.bak
+registration.json
+pending-registration.json
 *.log
 *.pem
 *.key

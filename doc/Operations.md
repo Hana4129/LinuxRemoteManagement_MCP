@@ -181,6 +181,68 @@ curl -X POST https://<mcp-server>/api/agent-credentials \
 (代替フロー) Console側で生成する `POST /api/agent-credentials/generate` も
 引き続き利用可能。生成した生値をAgentのconfig.ymlへ手動配布する。
 
+#### 生トークンを端末・ログへ出さない発行 (registration payload 方式)
+
+`-registration-file` を使うと、生トークンは 0600 のファイルへ出力され、Console登録APIへ
+そのままPOSTできるJSON (`server_id` / `name` / `token` / `agent_token_id`) が得られる。
+`agent_token_id` を埋め込むため、Console側のAgent照会 (agent.admin_token) は不要。
+
+```bash
+sudo credential-issue -name web01-agent -scope operator \
+  -config /etc/lrm-mcp-agent/config.yml -apply \
+  -registration-file /root/registration.json -server-id web01
+curl -X POST https://<mcp-server>/api/agent-credentials \
+  -H "Content-Type: application/json" --data-binary @/root/registration.json
+rm -f /root/registration.json   # 提出後は必ず削除する
+```
+
+#### 管理トークンhash (agent.admin_token_hash) の設定
+
+失効同期 (private admin API) の認証に使う。secretそのものは保存されず、SHA-256のみが残る。
+
+```bash
+printf '%s' '<admin-secret>' > /root/.lrm-admin-secret && chmod 600 /root/.lrm-admin-secret
+sudo credential-issue -set-admin-token -admin-token-file /root/.lrm-admin-secret \
+  -config /etc/lrm-mcp-agent/config.yml
+```
+
+- 既存hashと同一なら冪等 (何も書かない)。異なる場合は上書きせずエラーになる
+  (意図的なローテーション時のみ `-replace-admin-token` を付ける)
+- 標準出力へ `admin_token_hash=<hex>` が表示される。Console側 config の
+  `agent.admin_token` には**同じsecret**を設定する
+
+#### provision (setup.sh --provision) による一括セットアップ
+
+管理hash設定 → credential発行 → Console登録 → サービス起動/health check を1コマンドで行う。
+
+```bash
+sudo ./scripts/setup.sh --provision
+```
+
+非対話実行 (CI/自動化) は環境変数で入力を与える。`--help` に全項目がある。
+
+```bash
+sudo LRM_SERVER_ID=web01 LRM_CREDENTIAL_NAME=web01-agent LRM_CREDENTIAL_SCOPE=operator \
+     LRM_AGENT_ADMIN_TOKEN_FILE=/root/.lrm-admin-secret \
+     LRM_CONSOLE_URL=https://console.example.jp \
+     LRM_CONSOLE_AUTH_HEADER_FILE=/root/.console-auth-header \
+     LRM_REQUIRE_REGISTRATION=1 ./scripts/setup.sh --provision
+```
+
+動作の要点:
+
+| 項目 | 挙動 |
+|------|------|
+| secret/認証情報の受け渡し | ファイルまたは標準入力のみ。curl へは `-K` 設定ファイル経由 (argv/`ps` に出さない) |
+| 認証ヘッダ | `LRM_CONSOLE_AUTH_HEADER_FILE` は1行1ヘッダで複数行可 (OIDCセッション時は `Cookie:` + `X-CSRF-Token:` の2行) |
+| 一時ファイル | `trap` で終了時に削除 |
+| admin hash の上書き | 既定は拒否。`LRM_REPLACE_ADMIN_TOKEN=1` で明示置換 |
+| credential の token id 重複 | エラーで停止し config.yml を変更しない |
+| Console登録失敗 | 登録用ペイロード (生トークン含む/0600) を保存して再送を案内。`LRM_REQUIRE_REGISTRATION=1` なら異常終了 |
+| 非対話での入力不足 | 明示エラーで終了する (プロンプト待ちしない) |
+| サービス操作 | `systemctl` が無い環境 (コンテナ等) では警告のみで継続 |
+| health check | `agent.listen` のポートへ `https://127.0.0.1:<port>/v1/health`。自己署名証明書は `LRM_AGENT_HEALTH_INSECURE=1` |
+
 #### 環境変数からの参照登録 (Secret Manager連携)
 
 トークンの生値を管理APIリクエストへ直接載せず、環境変数名で参照して登録できる

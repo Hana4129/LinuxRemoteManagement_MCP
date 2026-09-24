@@ -3,6 +3,10 @@ set -euo pipefail
 
 # Token setup script for Linux Agent
 # Prompts for raw tokens, generates SHA-256 hashes, and updates config.yml
+#
+# NOTE: これは旧方式 (legacy)。新規 credential の発行には
+#       credential-issue CLI を使うことを推奨する (doc/Operations.md 参照)。
+#       このスクリプトは既存トークンの hash を対話的に設定する用途に残している。
 
 CONFIG_DIR="/etc/lrm-mcp-agent"
 CONFIG_FILE="$CONFIG_DIR/config.yml"
