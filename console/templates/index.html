@@ -118,74 +118,67 @@
 
     <section id="tab-help" class="tab-panel">
       <div class="help-card">
-        <h2>Management Console</h2>
-        <p>This console is bundled with the MCP Server (FastAPI). It calls each node's Linux Agent via HTTPS with Bearer Token and displays install status, OS version, uptime, etc.</p>
-        <h3>Authentication &amp; credential flow</h3>
-        <p>The system uses three distinct credentials. Each is managed in a different UI tab:</p>
+        <h2>管理コンソール</h2>
+        <p>このコンソールは MCP Server (FastAPI) に同梱されています。各ノードの Linux Agent に HTTPS + Bearer トークンで接続し、インストール状況・OS バージョン・稼働時間などを表示します。</p>
+        <h3>認証・資格情報のフロー</h3>
+        <p>本システムでは 3 種類の資格情報を使い分けています。それぞれ異なるタブで管理します:</p>
         <table class="auth-flow-table">
-          <thead><tr><th>Credential</th><th>Where used</th><th>Managed in tab</th></tr></thead>
+          <thead><tr><th>資格情報</th><th>使われる場面</th><th>管理するタブ</th></tr></thead>
           <tbody>
-            <tr><td><strong>MCP token</strong></td><td>MCP Client → MCP Server (Claude Desktop authenticates to MCP Server)</td><td>MCP Tokens</td></tr>
-            <tr><td><strong>Agent credential</strong></td><td>MCP Server → Linux Agent (mTLS + Bearer token for node access)</td><td>Access → Agent credentials</td></tr>
-            <tr><td><strong>Console session</strong></td><td>Browser → Management Console (Basic auth or OIDC login)</td><td>Login screen</td></tr>
+            <tr><td><strong>MCP トークン</strong></td><td>MCP クライアント → MCP Server (Claude Desktop が MCP Server に認証)</td><td>MCP Tokens</td></tr>
+            <tr><td><strong>Agent credential</strong></td><td>MCP Server → Linux Agent (ノードアクセス用の mTLS + Bearer トークン)</td><td>Access → Agent credentials</td></tr>
+            <tr><td><strong>コンソールセッション</strong></td><td>ブラウザ → 管理コンソール (Basic 認証または OIDC ログイン)</td><td>ログイン画面</td></tr>
           </tbody>
         </table>
-        <h4>Runtime sequence (command execution)</h4>
-        <pre class="seq-diagram">MCP Client        MCP Server         Linux Agent
-(Claude Desktop)  (this console)      (acemagic01:9443)
+        <h4>実行時のシーケンス (コマンド実行)</h4>
+        <pre class="seq-diagram">MCP クライアント      MCP Server          Linux Agent
+(Claude Desktop)    (このコンソール)     (acemagic01:9443)
      │                  │                    │
-     │  1. MCP token    │                    │
-     │  (Bearer)        │                    │
+     │  1. MCP トークン  │                    │
+     │  (Bearer)         │                    │
      │─────────────────▶│                    │
-     │                  │  2. Agent cred     │
-     │                  │  (mTLS + Bearer)   │
+     │                  │  2. Agent credential│
+     │                  │  (mTLS + Bearer)    │
      │                  │───────────────────▶│
      │                  │                    │
-     │                  │  3. Command result │
+     │                  │  3. コマンド結果    │
      │                  │  (JSON)            │
      │                  │◀───────────────────│
-     │  4. Response     │                    │
+     │  4. 応答          │                    │
      │◀─────────────────│                    │</pre>
-        <h4>Credential issuance sequence</h4>
-        <pre class="seq-diagram">Admin (Browser)    Console (8080)     MCP Server         Linux Agent
-     │                  │                  │                    │
-     │  1. Login        │                  │                    │
-     │  (Basic/OIDC)    │                  │                    │
-     │─────────────────▶│                  │                    │
-     │                  │                  │                    │
-     │  2. Issue Token  │                  │                    │
-     │  (MCP Tokens tab)│                  │                    │
-     │─────────────────▶│  3. Store hash    │                    │
-     │                  │  in tokens.db     │                    │
-     │                  │─────────────────▶│                    │
-     │  ◀── raw value   │                  │                    │
-     │     (once)       │                  │                    │
-     │                  │                  │                    │
-     │  4. Generate     │                  │                    │
-     │  Agent cred      │                  │                    │
-     │  (Access tab)    │                  │                    │
-     │─────────────────▶│  5. Register      │                    │
-     │                  │  (mTLS+admin tok) │                    │
-     │                  │─────────────────▶│  6. Store in       │
-     │                  │                  │  config.yml        │
-     │                  │                  │───────────────────▶│
-     │  ◀── raw value   │                  │                    │
-     │     (once)       │                  │                    │</pre>
+        <h4>資格情報の発行シーケンス</h4>
+        <pre class="seq-diagram">管理者                Agent ホスト          コンソール (8080)
+     │                  │                    │
+     │  1. credential-issue -name ... -apply │
+     │     (生トークン生成 + hash 発行)       │
+     │─────────────────▶│                    │
+     │  2. 生値を一度だけ表示                │
+     │◀─────────────────│                    │
+     │  3. 表示された curl を実行            │
+     │     (生値を1回提出)                    │
+     │──────────────────────────────────────▶│
+     │                  │  4. Agent の token  │
+     │                  │     一覧から name   │
+     │                  │     一致で id 自動解決
+     │◀──────────────────────────────────────│
+     │                  │  5. 暗号化して保存 │</pre>
+        <p class="hint">Agent credential の登録は Agent ホスト上の <code>credential-issue</code> CLI で行います (コンソールに登録フォームはありません)。コンソールからは一覧・失効・削除のみ操作できます。詳細は doc/Operations.md を参照してください。</p>
         <h3>API</h3>
         <ul>
-          <li><code>GET  /api/meta</code> - app / servers / scopes metadata</li>
-          <li><code>GET  /api/nodes</code> - node list (status resolved)</li>
-          <li><code>GET  /api/nodes/{id}</code> - node detail</li>
-          <li><code>GET  /api/tokens</code> - token list (raw value hidden)</li>
-          <li><code>POST /api/tokens</code> - issue token (raw value returned once)</li>
-          <li><code>POST /api/tokens/import</code> - import externally issued token</li>
-          <li><code>GET  /api/servers</code> - list registered nodes</li>
-          <li><code>POST /api/servers</code> - add a new node (+ optional token)</li>
-          <li><code>DEL  /api/servers/{id}</code> - delete a node (revokes related tokens)</li>
+          <li><code>GET  /api/meta</code> — アプリ / サーバー / スコープのメタデータ</li>
+          <li><code>GET  /api/nodes</code> — ノード一覧 (ステータス解決済み)</li>
+          <li><code>GET  /api/nodes/{id}</code> — ノード詳細</li>
+          <li><code>GET  /api/tokens</code> — トークン一覧 (生値は非表示)</li>
+          <li><code>POST /api/tokens</code> — トークン発行 (生値を1回だけ返す)</li>
+          <li><code>GET  /api/tokens/{id}/reveal</code> — トークン生値の再表示 (管理者のみ・監査ログに記録)</li>
+          <li><code>POST /api/tokens/import</code> — 外部発行トークンのインポート</li>
+          <li><code>GET  /api/servers</code> — 登録済みノードの一覧</li>
+          <li><code>POST /api/servers</code> — ノードの追加 (+ 任意でトークン発行)</li>
+          <li><code>DEL  /api/servers/{id}</code> — ノードの削除 (関連トークンを失効)</li>
         </ul>
-        <h3>MCP client config (claude_desktop_config.json)</h3>
+        <h3>MCP クライアント設定 (claude_desktop_config.json)</h3>
         <pre id="mcp-config-snippet"><code>Loading...</code></pre>
-        <p class="hint">Token raw values are stored in data/tokens.db (SQLite, 0600). In production, replace with a Secret Store (Vault, etc). See README.md.</p>
+        <p class="hint">トークンの生値は data/tokens.db (SQLite, 0600) に保存されます。本番環境では Secret Store (Vault など) への置き換えを推奨します。詳細は README.md を参照してください。</p>
       </div>
     </section>
   </main>
