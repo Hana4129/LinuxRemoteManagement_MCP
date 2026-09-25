@@ -215,6 +215,12 @@ sudo credential-issue -set-admin-token -admin-token-file /root/.lrm-admin-secret
 
 管理hash設定 → credential発行 → Console登録 → サービス起動/health check を1コマンドで行う。
 
+前提: エージェントホスト上に `lrm-mcp-agent` と `credential-issue` のバイナリが必要。
+Goが無い環境では `make dist` (Docker で linux/amd64 をビルド) を実行し、生成物
+`dist/linux-<arch>/{lrm-mcp-agent,credential-issue}` を `scripts/setup.sh` の1つ上の
+ディレクトリ (または同ディレクトリ) へコピーする。`credential-issue` が見つからない場合は
+探索パスとビルド手順を表示して異常終了する。
+
 ```bash
 sudo ./scripts/setup.sh --provision
 ```

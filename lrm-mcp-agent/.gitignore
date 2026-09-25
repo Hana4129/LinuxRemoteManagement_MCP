@@ -1,7 +1,7 @@
 bin/
 data/
 tmp/
-# make build で生成されるバイナリ
+# make build / make dist で生成されるバイナリ
 /lrm-mcp-agent
 /credential-issue
 # credential-issue / setup.sh --provision が生成するバックアップ・一時ファイル

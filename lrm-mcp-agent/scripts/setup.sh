@@ -15,7 +15,22 @@ LOG_DIR="/var/log/lrm-mcp-agent"
 CONFIG_FILE="$CONFIG_DIR/config.yml"
 SERVICE="lrm-mcp-agent"
 
+# スクリプト自身の位置から配布ディレクトリを解決する (実行CWDに依存しない)
+SOURCE_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+
 PROVISION=0
+
+# ファイルを カレント → スクリプトの親 → dist/<os>-<arch> の順に探す
+find_source_file() {
+    local candidate
+    for candidate in "./$1" "$SOURCE_DIR/$1" "$SOURCE_DIR"/dist/*/"$1"; do
+        if [ -f "$candidate" ]; then
+            printf '%s' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
 
 usage() {
     cat <<'USAGE'
@@ -79,36 +94,41 @@ mkdir -p "$CONFIG_DIR" "$DATA_DIR" "$LOG_DIR"
 chown "$USER:$GROUP" "$DATA_DIR" "$LOG_DIR"
 chmod 700 "$DATA_DIR" "$LOG_DIR"
 
-# Install binary (if built)
-if [ -f "lrm-mcp-agent" ]; then
-    cp lrm-mcp-agent "$INSTALL_DIR/lrm-mcp-agent"
-    chmod 755 "$INSTALL_DIR/lrm-mcp-agent"
-    echo "Installed binary to $INSTALL_DIR/lrm-mcp-agent"
-fi
-
-# Install credential-issue CLI (if built)
-if [ -f "credential-issue" ]; then
-    cp credential-issue "$INSTALL_DIR/credential-issue"
-    chmod 755 "$INSTALL_DIR/credential-issue"
-    echo "Installed binary to $INSTALL_DIR/credential-issue"
-fi
+# Install binaries (if built)
+for bin in lrm-mcp-agent credential-issue; do
+    if src=$(find_source_file "$bin"); then
+        cp "$src" "$INSTALL_DIR/$bin"
+        chmod 755 "$INSTALL_DIR/$bin"
+        echo "Installed binary to $INSTALL_DIR/$bin"
+    else
+        echo "WARN: $bin が見つからないため配置をスキップしました" >&2
+        echo "      'make dist' (Dockerでlinux/amd64ビルド) または 'make build' を実行し、" >&2
+        echo "      バイナリを $SOURCE_DIR へ置いてから再実行してください" >&2
+    fi
+done
 
 # Install config (if not exists)
-if [ ! -f "$CONFIG_DIR/config.yml" ] && [ -f "config.yml" ]; then
-    cp config.yml "$CONFIG_DIR/config.yml"
-    echo "Installed config to $CONFIG_DIR/config.yml"
+if [ ! -f "$CONFIG_FILE" ]; then
+    if src=$(find_source_file "config.yml"); then
+        cp "$src" "$CONFIG_FILE"
+        echo "Installed config to $CONFIG_FILE"
+    fi
 fi
 
 # Ensure config permissions are correct (always run)
-if [ -f "$CONFIG_DIR/config.yml" ]; then
-    chmod 600 "$CONFIG_DIR/config.yml"
-    chown "$USER:$GROUP" "$CONFIG_DIR/config.yml"
+if [ -f "$CONFIG_FILE" ]; then
+    chmod 600 "$CONFIG_FILE"
+    chown "$USER:$GROUP" "$CONFIG_FILE"
     echo "Config permissions set (user: $USER, perm: 600)"
 fi
 
 # Install systemd service
-if [ -f "scripts/lrm-mcp-agent.service" ]; then
-    cp scripts/lrm-mcp-agent.service /etc/systemd/system/lrm-mcp-agent.service
+SERVICE_SRC="$SOURCE_DIR/scripts/lrm-mcp-agent.service"
+if [ ! -f "$SERVICE_SRC" ] && [ -f "scripts/lrm-mcp-agent.service" ]; then
+    SERVICE_SRC="scripts/lrm-mcp-agent.service"
+fi
+if [ -f "$SERVICE_SRC" ]; then
+    cp "$SERVICE_SRC" /etc/systemd/system/lrm-mcp-agent.service
     systemctl daemon-reload
     systemctl enable lrm-mcp-agent
     echo "Installed systemd service"
@@ -137,10 +157,16 @@ find_credential_issue() {
         printf '%s' "$LRM_CREDENTIAL_ISSUE_BIN"
         return 0
     fi
-    if [ -x "$INSTALL_DIR/credential-issue" ]; then
-        printf '%s' "$INSTALL_DIR/credential-issue"
-        return 0
-    fi
+    local candidate
+    for candidate in "$INSTALL_DIR/credential-issue" \
+        "$SOURCE_DIR/credential-issue" \
+        "./credential-issue" \
+        "$SOURCE_DIR"/dist/*/credential-issue; do
+        if [ -x "$candidate" ]; then
+            printf '%s' "$candidate"
+            return 0
+        fi
+    done
     command -v credential-issue 2>/dev/null
 }
 
@@ -167,7 +193,17 @@ run_provision() {
 
     local issue_bin
     if ! issue_bin=$(find_credential_issue); then
-        provision_die "credential-issue が見つかりません。'make build' でビルドするか LRM_CREDENTIAL_ISSUE_BIN を指定してください"
+        echo "error: credential-issue CLI が見つかりません" >&2
+        echo "  探した場所:" >&2
+        echo "    \$LRM_CREDENTIAL_ISSUE_BIN / $INSTALL_DIR/credential-issue" >&2
+        echo "    $SOURCE_DIR/credential-issue / $SOURCE_DIR/dist/*/credential-issue / PATH" >&2
+
+        echo "  ビルド方法 (エージェントホストが linux/amd64 の場合):" >&2
+        echo "    make dist    # Dockerで linux/amd64 をビルド (Goが無い環境でも可)" >&2
+        echo "    make build   # Goがある環境でネイティブビルド" >&2
+        echo "  ビルドしたバイナリを $SOURCE_DIR へ置くか、LRM_CREDENTIAL_ISSUE_BIN で指定して再実行:" >&2
+        echo "    sudo ./scripts/setup.sh --provision" >&2
+        exit 1
     fi
     [ -f "$CONFIG_FILE" ] || provision_die "config.yml が見つかりません: $CONFIG_FILE"
 

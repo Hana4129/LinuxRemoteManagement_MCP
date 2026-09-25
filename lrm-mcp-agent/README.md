@@ -176,6 +176,18 @@ sudo ./scripts/setup.sh             # 導入のみ (専用ユーザー/config/sy
 sudo ./scripts/setup.sh --provision # 導入 + 管理hash設定 + credential発行 + Console登録 + 起動/疎通確認
 ```
 
+エージェントホストへ配布するバイナリの準備 (Goが無い環境ではDockerを使用):
+
+```bash
+make dist        # dist/linux-amd64/{lrm-mcp-agent,credential-issue} を生成 (arm64 は DIST_ARCH=arm64)
+# 生成物を setup.sh と同じディレクトリ (または <dir>/dist/linux-amd64/) へコピーしてから実行する
+# 例: scp dist/linux-amd64/lrm-mcp-agent dist/linux-amd64/credential-issue <host>:/opt/lrm-mcp-agent/
+```
+
+`credential-issue` が見つからない場合や、古いバイナリを使った場合は
+`setup.sh --provision` が異常終了し、探索パスとビルド手順を表示する
+(古いバイナリは `flag provided but not defined: -set-admin-token` で失敗するため必ず再ビルドする)。
+
 `--provision` は対話式。非対話 (CI/自動化) では環境変数で入力を渡す:
 
 ```bash
