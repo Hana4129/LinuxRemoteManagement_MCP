@@ -15,9 +15,13 @@ from .config import ServerConfig
 from .tokens import humanize_uptime, now_iso
 
 # インストール状況の分類 → ラベル（UI表示用）
+# キーは AgentClient が返す error_kind と一致させる。
+#   agent_client.py は 401/403 を "auth" として返すため、ここにも "auth" が必要。
+#   （"auth_error" しか無いと認証エラーが「エラー」にfallbackする）
 INSTALL_STATUS_LABELS: dict[str, str] = {
     "running": "導入済み・稼働中",
-    "auth_error": "導入済み（認証エラー）",
+    "auth": "導入済み（認証エラー）",
+    "auth_error": "導入済み（認証エラー）",  # 旧キー（後方互換）
     "http_error": "導入済み（異常応答）",
     "not_responding": "未導入 / Agent未起動",
     "unreachable": "到達不能",

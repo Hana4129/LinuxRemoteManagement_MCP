@@ -124,3 +124,28 @@ def test_nodes_reports_unreachable(client):
     statuses = {n["id"]: n["install_status"] for n in body["nodes"]}
     assert statuses["dev-web-01"] in {"not_responding", "unreachable"}
     assert body["summary"]["problems"] == 2
+
+
+def test_install_status_label_covers_agent_client_kinds():
+    """AgentClient の error_kind が全てUIラベルへ引けること。
+
+    Agentが401/403を返すと AgentClient は kind="auth" を返す。
+    INSTALL_STATUS_LABELS に "auth" が無いとラベルが「エラー」へfallbackし、
+    認証エラーが区別できなくなる (回帰防止)。
+    """
+    from app.agent_client import AgentResult
+    from app.status import INSTALL_STATUS_LABELS, install_status_label
+
+    # AgentClient が返し得る kind を実際に生成して網羅性を確認する
+    auth_result = AgentResult.failure("認証エラー (HTTP 401)：トークンが無効か権限がありません。", kind="auth")
+    assert auth_result.error_kind == "auth"
+    assert install_status_label(auth_result.error_kind) == "導入済み（認証エラー）"
+
+    # ラベルが fallback ("エラー") になっていない kinds を列挙
+    for kind in ("running", "auth", "http_error", "not_responding", "unreachable", "no_token"):
+        assert kind in INSTALL_STATUS_LABELS, f"error_kind '{kind}' にUIラベルが無い"
+        assert install_status_label(kind) != "エラー"
+
+    # 未知の kind のみ fallback する
+    assert install_status_label("no-such-kind") == "エラー"
+    assert install_status_label(None) == "エラー"

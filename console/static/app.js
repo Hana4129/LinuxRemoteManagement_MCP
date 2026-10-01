@@ -119,7 +119,8 @@ async function checkAuth() {
     });
   }
 }
-const STATUS_CLASS = { running: "badge-running", auth_error: "badge-auth_error", http_error: "badge-http_error", not_responding: "badge-not_responding", unreachable: "badge-unreachable", no_token: "badge-no_token", error: "badge-error" };
+// キーは app/status.py の AgentClient error_kind ("auth" 等) と一致させる
+const STATUS_CLASS = { running: "badge-running", auth: "badge-auth_error", auth_error: "badge-auth_error", http_error: "badge-http_error", not_responding: "badge-not_responding", unreachable: "badge-unreachable", no_token: "badge-no_token", error: "badge-error" };
 function badgeStatus(klass, label) { return `<span class="badge ${STATUS_CLASS[klass] || "badge-error"}">${esc(label)}</span>`; }
 function badgeEnv(env) {
   const m = { production: ["badge-prod", "本番"], staging: ["badge-stg", "検証"], development: ["badge-dev", "開発"] };

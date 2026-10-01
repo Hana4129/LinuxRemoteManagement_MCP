@@ -172,8 +172,9 @@ sudo credential-issue -set-admin-token -admin-token-file /root/.lrm-admin-secret
 ### systemd
 
 ```bash
-sudo ./scripts/setup.sh             # 導入のみ (専用ユーザー/config/systemd unit)
-sudo ./scripts/setup.sh --provision # 導入 + 管理hash設定 + credential発行 + Console登録 + 起動/疎通確認
+sudo ./scripts/setup.sh                 # 導入のみ (専用ユーザー/config/systemd unit)
+sudo ./scripts/setup.sh --provision     # 導入 + 管理hash設定 + credential発行 + Console登録 + 起動/疎通確認
+sudo ./scripts/setup.sh --register-only # 未完了だった Console 登録の再送 (既存ペイロードを提出して自動削除)
 ```
 
 エージェントホストへ配布するバイナリの準備 (Goが無い環境ではDockerを使用):

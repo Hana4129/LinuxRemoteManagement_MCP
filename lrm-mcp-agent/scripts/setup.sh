@@ -19,6 +19,13 @@ SERVICE="lrm-mcp-agent"
 SOURCE_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 
 PROVISION=0
+REGISTER_ONLY=0
+
+# provision 実行結果 (Console登録が未完了だったとき、最終サマリーで
+# 実際の登録コマンドを案内するため保持する)
+REGISTRATION_INCOMPLETE=0
+REGISTRATION_CONSOLE_URL=""
+REGISTRATION_PENDING=""
 
 # ファイルを カレント → スクリプトの親 → dist/<os>-<arch> の順に探す
 find_source_file() {
@@ -34,15 +41,19 @@ find_source_file() {
 
 usage() {
     cat <<'USAGE'
-Usage: setup.sh [--provision] [-h|--help]
+Usage: setup.sh [--provision] [--register-only] [-h|--help]
 
   (no option)  Agentを導入する (ユーザー/ディレクトリ/バイナリ/config/systemd unit)
   --provision  上記に加えて、管理トークンhash設定 → credential発行 → Console登録 →
                サービス起動・疎通確認 までを行う。既定は対話式で、下記の環境変数を
                与えると非対話でも実行できる。
+  --register-only
+               保存済みの登録用ペイロード (pending-registration.json) を Console へ
+               1回だけ提出する。--provision でConsole登録が未完了だったときの再送用。
+               credential発行やconfig更新はせず、導入処理もスキップする。
 
-Provision用の環境変数:
-  LRM_SERVER_ID                Console側のNode/server id (必須)
+Provision用の環境変数 (--provision / --register-only で共通):
+  LRM_SERVER_ID                Console側のNode/server id (--provision では必須)
   LRM_CREDENTIAL_NAME          credential名 (既定: <server id>-agent)
   LRM_CREDENTIAL_SCOPE         readonly|operator (既定: operator)
   LRM_AGENT_ADMIN_TOKEN_FILE   管理secretを格納したファイル ('-' で標準入力)
@@ -68,11 +79,15 @@ USAGE
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --provision) PROVISION=1 ;;
+        --register-only) REGISTER_ONLY=1 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
     esac
     shift
 done
+
+# --register-only は「保存済みペイロードの提出」のみ行うため、導入処理はスキップする
+if [ "$REGISTER_ONLY" -eq 0 ]; then
 
 echo "=== Linux Agent Setup ==="
 
@@ -133,6 +148,8 @@ if [ -f "$SERVICE_SRC" ]; then
     systemctl enable lrm-mcp-agent
     echo "Installed systemd service"
 fi
+
+fi  # end of install block (--register-only は導入処理をスキップ)
 
 # --------------------------------------------------------------- provision ---
 # 以降は `setup.sh --provision` で実行される provision 処理。
@@ -282,53 +299,9 @@ run_provision() {
     local registered=0
     local pending_file="${LRM_PENDING_REGISTRATION_FILE:-$CONFIG_DIR/pending-registration.json}"
     if [ -n "$console_url" ]; then
-        # curl の設定ファイル (-K) を使い、認証情報やペイロードを argv に載せない
-        local curl_conf="$tmpdir/curl.conf" header_line="" password=""
-        {
-            printf 'url = "%s/api/agent-credentials"\n' "$console_url"
-            printf 'request = "POST"\n'
-            printf 'header = "Content-Type: application/json"\n'
-            printf 'data-binary = "@%s"\n' "$reg_file"
-            printf 'output = "%s/response.json"\n' "$tmpdir"
-            printf 'silent\nshow-error\n'
-            if [ "${LRM_CONSOLE_CURL_INSECURE:-0}" = "1" ]; then
-                printf 'insecure\n'
-            fi
-            if [ -n "${LRM_CONSOLE_AUTH_HEADER_FILE:-}" ]; then
-                [ -r "$LRM_CONSOLE_AUTH_HEADER_FILE" ] ||
-                    provision_die "LRM_CONSOLE_AUTH_HEADER_FILE が読めません: $LRM_CONSOLE_AUTH_HEADER_FILE"
-                # 1行1ヘッダ (複数行可): 例 "Authorization: Basic ..." /
-                # "Cookie: lrm_session=..." + "X-CSRF-Token: ..." (OIDCセッション併用時)
-                while IFS= read -r header_line || [ -n "$header_line" ]; do
-                    header_line=$(printf '%s' "$header_line" | tr -d '\r')
-                    [ -n "$header_line" ] || continue
-                    printf 'header = "%s"\n' "$(escape_curl_value "$header_line")"
-                done <"$LRM_CONSOLE_AUTH_HEADER_FILE"
-            elif [ -n "${LRM_CONSOLE_USER:-}" ] && [ -n "${LRM_CONSOLE_PASSWORD_FILE:-}" ]; then
-                [ -r "$LRM_CONSOLE_PASSWORD_FILE" ] ||
-                    provision_die "LRM_CONSOLE_PASSWORD_FILE が読めません: $LRM_CONSOLE_PASSWORD_FILE"
-                password=$(tr -d '\r\n' <"$LRM_CONSOLE_PASSWORD_FILE")
-                printf 'user = "%s:%s"\n' "$LRM_CONSOLE_USER" "$(escape_curl_value "$password")"
-                unset password
-            else
-                echo "WARN: Console認証情報が未指定です。Console側で認証が無効な場合のみ続行できます" >&2
-                echo "      (LRM_CONSOLE_AUTH_HEADER_FILE か LRM_CONSOLE_USER + LRM_CONSOLE_PASSWORD_FILE を指定)" >&2
-            fi
-        } >"$curl_conf"
-
-        local http_code=""
-        http_code=$(curl -K "$curl_conf" -w '%{http_code}' 2>"$tmpdir/curl.err") || true
-        if [ "$http_code" = "200" ] || [ "$http_code" = "201" ]; then
+        if console_register "$console_url" "$reg_file" "$tmpdir"; then
             registered=1
-            echo "      Console登録OK (HTTP $http_code)" >&2
-            head -c 500 "$tmpdir/response.json" 2>/dev/null >&2 || true
-            echo "" >&2
             rm -f "$reg_file"
-        else
-            echo "ERROR: Console登録に失敗しました (HTTP ${http_code:-接続失敗})" >&2
-            head -c 500 "$tmpdir/response.json" 2>/dev/null >&2 || true
-            head -c 500 "$tmpdir/curl.err" 2>/dev/null >&2 || true
-            echo "" >&2
         fi
     else
         echo "WARN: LRM_CONSOLE_URL が未指定のため Console登録をスキップしました" >&2
@@ -339,14 +312,16 @@ run_provision() {
         # 0600 で保存して再送できるようにする (Agent設定はロールバックしない)。
         install -m 600 "$reg_file" "$pending_file" 2>/dev/null || cp "$reg_file" "$pending_file"
         chmod 600 "$pending_file"
+        REGISTRATION_INCOMPLETE=1
+        REGISTRATION_CONSOLE_URL="$console_url"
+        REGISTRATION_PENDING="$pending_file"
         echo "      未登録のため登録用ペイロードを保存しました (生トークンを含む / 0600):" >&2
         echo "        $pending_file" >&2
-        echo "      登録後は必ず削除してください: rm -f $pending_file" >&2
-        echo "      再送例: curl -sS -X POST '<CONSOLE_URL>/api/agent-credentials' \\" >&2
-        echo "                -H 'Content-Type: application/json' <認証オプション> --data-binary @$pending_file" >&2
         if [ "${LRM_REQUIRE_REGISTRATION:-0}" = "1" ]; then
+            print_register_guidance >&2
             provision_die "Console登録が完了していません (LRM_REQUIRE_REGISTRATION=1)"
         fi
+        echo "      登録コマンドは最終サマリー (--register-only) を参照してください" >&2
     fi
 
     echo ""
@@ -402,6 +377,149 @@ escape_curl_value() {
     printf '%s' "$value"
 }
 
+# console_register は登録用ペイロードを Console の
+# POST /api/agent-credentials へ提出する。
+#
+#   $1 console_url (例: https://console.example.jp)
+#   $2 payload     登録用 JSON ファイル
+#   $3 workdir     curl の一時作業ディレクトリ (既存のディレクトリ)
+#
+# 認証情報とペイロードは curl の設定ファイル (-K) 経由で渡すため、argv・履歴・
+# プロセス一覧へ露出しない。成功 (200/201) 時のみ true を返す。
+console_register() {
+    local console_url="${1%/}" payload="$2" workdir="$3"
+    local curl_conf="$workdir/curl.conf" header_line="" password=""
+    {
+        printf 'url = "%s/api/agent-credentials"\n' "$console_url"
+        printf 'request = "POST"\n'
+        printf 'header = "Content-Type: application/json"\n'
+        printf 'data-binary = "@%s"\n' "$payload"
+        printf 'output = "%s/response.json"\n' "$workdir"
+        printf 'silent\nshow-error\n'
+        if [ "${LRM_CONSOLE_CURL_INSECURE:-0}" = "1" ]; then
+            printf 'insecure\n'
+        fi
+        if [ -n "${LRM_CONSOLE_AUTH_HEADER_FILE:-}" ]; then
+            [ -r "$LRM_CONSOLE_AUTH_HEADER_FILE" ] ||
+                provision_die "LRM_CONSOLE_AUTH_HEADER_FILE が読めません: $LRM_CONSOLE_AUTH_HEADER_FILE"
+            # 1行1ヘッダ (複数行可): 例 "Authorization: Basic ..." /
+            # "Cookie: lrm_session=..." + "X-CSRF-Token: ..." (OIDCセッション併用時)
+            while IFS= read -r header_line || [ -n "$header_line" ]; do
+                header_line=$(printf '%s' "$header_line" | tr -d '\r')
+                [ -n "$header_line" ] || continue
+                printf 'header = "%s"\n' "$(escape_curl_value "$header_line")"
+            done <"$LRM_CONSOLE_AUTH_HEADER_FILE"
+        elif [ -n "${LRM_CONSOLE_USER:-}" ] && [ -n "${LRM_CONSOLE_PASSWORD_FILE:-}" ]; then
+            [ -r "$LRM_CONSOLE_PASSWORD_FILE" ] ||
+                provision_die "LRM_CONSOLE_PASSWORD_FILE が読めません: $LRM_CONSOLE_PASSWORD_FILE"
+            password=$(tr -d '\r\n' <"$LRM_CONSOLE_PASSWORD_FILE")
+            printf 'user = "%s:%s"\n' "$LRM_CONSOLE_USER" "$(escape_curl_value "$password")"
+            unset password
+        else
+            echo "WARN: Console認証情報が未指定です。Console側で認証が無効な場合のみ続行できます" >&2
+            echo "      (LRM_CONSOLE_AUTH_HEADER_FILE か LRM_CONSOLE_USER + LRM_CONSOLE_PASSWORD_FILE を指定)" >&2
+        fi
+    } >"$curl_conf"
+
+    local http_code=""
+    http_code=$(curl -K "$curl_conf" -w '%{http_code}' 2>"$workdir/curl.err") || true
+    if [ "$http_code" = "200" ] || [ "$http_code" = "201" ]; then
+        echo "      Console登録OK (HTTP $http_code)" >&2
+        head -c 500 "$workdir/response.json" 2>/dev/null >&2 || true
+        echo "" >&2
+        return 0
+    fi
+    echo "ERROR: Console登録に失敗しました (HTTP ${http_code:-接続失敗})" >&2
+    head -c 500 "$workdir/response.json" 2>/dev/null >&2 || true
+    head -c 500 "$workdir/curl.err" 2>/dev/null >&2 || true
+    echo "" >&2
+    return 1
+}
+
+# print_register_guidance は Console 登録の再送コマンドを案内する。
+# 秘密値 (password 等) は一切表示せず、利用者が既に持つ LRM_* 変数/ファイルパスを参照する。
+print_register_guidance() {
+    local url="${REGISTRATION_CONSOLE_URL:-}"
+    local pending="${REGISTRATION_PENDING:-$CONFIG_DIR/pending-registration.json}"
+    [ -n "$url" ] || url="<CONSOLE_URL>"
+
+    cat <<EOF
+
+── Console 登録が未完了です ────────────────────────────────────
+保存された登録用ペイロードを Console へ1回だけ提出してください。
+提出が成功すると、ペイロード (生トークンを含む) は自動的に削除されます。
+
+  # 1) Basic 認証の場合 (最も一般的):
+  sudo LRM_CONSOLE_URL=$url \\
+       LRM_CONSOLE_USER=<Consoleのユーザー名> \\
+       LRM_CONSOLE_PASSWORD_FILE=<パスワードを格納したファイル> \\
+       $0 --register-only
+
+  # 2) 認証ヘッダ (OIDC / ブラウザセッション) の場合:
+  sudo LRM_CONSOLE_URL=$url \\
+       LRM_CONSOLE_AUTH_HEADER_FILE=<1行1ヘッダのファイル> \\
+       $0 --register-only
+       # 例: "Cookie: lrm_session=..." と "X-CSRF-Token: ..." の2行
+
+  # 3) Console 側の認証が無効な場合:
+  sudo LRM_CONSOLE_URL=$url $0 --register-only
+
+  # (手動 curl で提出する場合の例):
+  #   curl -sS -X POST '$url/api/agent-credentials' \\
+  #     -u '<user>:<password>' -H 'Content-Type: application/json' \\
+  #     --data-binary @$pending && rm -f $pending
+
+  ※ TLS検証をスキップする場合は LRM_CONSOLE_CURL_INSECURE=1 を付与してください。
+  ※ 同じ credential 名での 'setup.sh --provision' 再実行は token id 重複で失敗します。
+    必ず上記 '--register-only' または手動 curl で提出してください。
+────────────────────────────────────────────────────────────────
+EOF
+}
+
+# run_register_only は保存済みの登録用ペイロードを Console へ1回だけ提出する。
+# credential の発行や config.yml の更新は行わない (Agent設定は変更しない)。
+run_register_only() {
+    umask 077
+    local pending_file="${LRM_PENDING_REGISTRATION_FILE:-$CONFIG_DIR/pending-registration.json}"
+    local console_url="${LRM_CONSOLE_URL:-}"
+
+    echo "=== Console 登録の再送 (--register-only) ==="
+    if [ ! -f "$pending_file" ]; then
+        echo "ERROR: 登録用ペイロードが見つかりません: $pending_file" >&2
+        echo "  (すでに登録済みか削除済みの可能性があります。" >&2
+        echo "   Consoleのノード一覧で対象ノードが「導入済み・稼働中」か確認してください)" >&2
+        exit 1
+    fi
+
+    if [ -z "$console_url" ] && is_interactive; then
+        read -r -p "Console URL (例: https://console.example.jp): " console_url || console_url=""
+    fi
+    [ -n "$console_url" ] ||
+        provision_die "LRM_CONSOLE_URL が未指定です (例: sudo LRM_CONSOLE_URL=https://console.example.jp $0 --register-only)"
+
+    local tmpdir
+    tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/lrm-register.XXXXXX")
+    # shellcheck disable=SC2064
+    trap "rm -rf -- '$tmpdir'" EXIT
+
+    if console_register "$console_url" "$pending_file" "$tmpdir"; then
+        # 登録済みの再送は二重登録になるため、成功時のみペイロードを削除する
+        rm -f "$pending_file"
+        echo ""
+        echo "  Console登録が完了しました。登録用ペイロードを削除しました: $pending_file"
+        echo "  Consoleのノード一覧が「導入済み・稼働中」になったことを確認してください。"
+    else
+        echo "  登録用ペイロードを保持しました (再送できます): $pending_file" >&2
+        echo "  URL・認証情報、および Console 側にこのサーバーIDが登録済みでないかを確認してください。" >&2
+        exit 1
+    fi
+}
+
+if [ "$REGISTER_ONLY" -eq 1 ]; then
+    run_register_only
+    exit 0
+fi
+
 if [ "$PROVISION" -eq 1 ]; then
     run_provision
 fi
@@ -410,9 +528,11 @@ echo ""
 echo "=== Setup complete ==="
 echo ""
 if [ "$PROVISION" -eq 1 ]; then
-    echo "Provisionの結果は上記の summary を参照してください。"
-    echo "Console登録が未完了の場合は、保存された登録用ペイロードをConsoleへ一度だけ提出し、"
-    echo "提出後は必ず削除してください (rm -f <payload>)。"
+    if [ "$REGISTRATION_INCOMPLETE" -eq 1 ]; then
+        print_register_guidance
+    else
+        echo "Provisionの結果は上記の summary を参照してください (Console登録も完了しています)。"
+    fi
 else
     echo "Next steps:"
     echo "  1. (推奨) 失効同期用のAdmin secretを設定する:"
