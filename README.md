@@ -1,210 +1,260 @@
-# Linux Remote Management MCP Server
+# Linux Remote Management MCP
 
-AI クライアント (Claude Desktop 等) から **MCP プロトコル** でリモート Linux ノードを管理するサーバー。
-社内管理コンソール (Web UI) も同梱。
+Claude Desktop などの **AI クライアントから MCP プロトコル経由でリモート Linux サーバーを安全に操作する**ための管理基盤です。SSH を使わず、HTTPS + Bearer Token の構造化 API で Linux を管理できます。
 
-## 構成
+---
+
+## これは何？
 
 ```
-mcp-server/
-├── app/
-│   ├── __init__.py        # パッケージ定義 + __version__
-│   ├── __main__.py        # コンソール起動エントリポイント (python -m app)
-│   ├── config.py          # config.yml → AppConfig 読み込み
-│   ├── tokens.py          # トークン生成/ハッシュ/ユーティリティ
-│   ├── db.py              # SQLite トークンストア (0600)
-│   ├── agent_client.py    # Linux Agent HTTP クライアント
-│   ├── status.py          # ノード状況集納
-│   ├── api.py             # 管理コンソール HTTP API
-│   ├── mcp_server.py      # FastMCP アプリ (MCP Tools)
-│   ├── mcp_entry.py       # MCP stdio エントリポイント
-│   ├── main.py            # FastAPI アプリ組立て
-│   └── mcp_http_entry.py  # MCP streamable HTTP エントリポイント
-├── tools/
-│   └── mock_agent.py      # 開発/テスト用モック Linux Agent
-├── templates/
-│   └── index.html         # 管理コンソール画面
-├── static/
-│   ├── style.css          # コンソールスタイル
-│   └── app.js             # コンソール UI ロジック (vanilla JS)
-├── config.yml             # サーバー/コンソール/Agent設定
-├── requirements.txt
-├── pyproject.toml
-└── data/                  # tokens.db はここに生成 (Git除外)
+Claude Desktop  ──MCP──▶  MCP Server  ──HTTPS + Bearer──▶  Linux Agent  ──▶  OS
+  (AI クライアント)          (FastAPI)                         (Go バイナリ)
 ```
+
+AI が「nginx を再起動して」と言うと、MCP Server が認可チェック・人間承認フローを経て Linux Agent に指示します。Agent は専用ユーザーで動作し、許可されたコマンドだけを実行します。
+
+---
+
+## スクリーンショット
+
+### Nodes — 管理対象サーバーの稼働状況
+
+![Nodes タブ](doc/screenshots/nodes.png)
+
+登録した Linux サーバーのインストール状況・OS・カーネル・稼働時間・Agent バージョン・レイテンシを一覧表示します。30 秒ごとに自動リフレッシュ。
+
+---
+
+### MCP Tokens — AI クライアント用トークン発行
+
+![MCP Tokens タブ](doc/screenshots/tokens.png)
+
+Claude Desktop などの MCP クライアントが使うアクセストークンを発行・管理します。スコープは `readonly`（閲覧のみ）/ `operator`（コマンド実行可）から選択。生トークンは発行時に 1 回だけ表示されます。
+
+---
+
+### Access — 利用者権限と Agent 認証情報
+
+![Access タブ](doc/screenshots/access.png)
+
+利用者の役割と権限（Principals）と、MCP Server → Linux Agent 間のサービス認証情報（Agent credentials）を管理します。ここで失効させると即座に Agent が拒否します。
+
+---
+
+### Approvals — 危険な操作の人間承認フロー
+
+![Approvals タブ](doc/screenshots/approvals.png)
+
+`restart_service` などの操作は AI が直接実行できず、人間の承認が必要です。承認すると MCP クライアントが `approval_id` 付きで再実行できます。承認は 1 回限り・デフォルト 15 分で失効します。
+
+---
+
+### Help — 認証フローと API リファレンス
+
+![Help タブ](doc/screenshots/help.png)
+
+3 種類の資格情報（MCP トークン / Agent credential / コンソールセッション）の役割と、コマンド実行時のシーケンスを図解しています。
+
+---
+
+## アーキテクチャ
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  AI クライアント (Claude Desktop / Codex 等)                     │
+└────────────────────────┬────────────────────────────────────────┘
+                         │ MCP (stdio / Streamable HTTP)
+                         │ Bearer トークン認証
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  MCP Server (Python / FastAPI)                                  │
+│  ┌──────────────┐  ┌────────────────┐  ┌───────────────────┐  │
+│  │  管理コンソール│  │ MCP Tool 提供  │  │ 認可 / 承認フロー │  │
+│  │  (Web UI)    │  │ get_system_info│  │ principal/role    │  │
+│  │  :8080       │  │ restart_service│  │ 人間承認ゲート    │  │
+│  └──────────────┘  │ read_file 等   │  └───────────────────┘  │
+│                    └────────────────┘                          │
+└────────────────────────┬────────────────────────────────────────┘
+                         │ HTTPS + Bearer Token (+ mTLS オプション)
+                         │ 専用 Agent credential
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  Linux Agent (Go バイナリ)                                       │
+│  ┌─────────────┐  ┌───────────────┐  ┌──────────────────────┐ │
+│  │ 認証        │  │ コマンド制限  │  │ 監査ログ             │ │
+│  │ Bearer Token│  │ Allowlist     │  │ JSONL + ハッシュチェーン│ │
+│  │ SHA-256比較 │  │ deny by default│  │ SIEM Webhook 転送   │ │
+│  └─────────────┘  └───────────────┘  └──────────────────────┘ │
+└────────────────────────┬────────────────────────────────────────┘
+                         │ 専用 Unix ユーザー (非 root)
+                         ▼
+                    Linux OS (systemd / filesystem)
+```
+
+---
+
+## MCP Tools 一覧
+
+AI クライアントから呼び出せる操作です。
+
+| ツール | 説明 | スコープ |
+|--------|------|----------|
+| `get_system_info` | ホスト名・OS・カーネル・稼働時間・メモリ | readonly |
+| `get_disk_usage` | ディスク使用状況 (df 相当) | readonly |
+| `get_processes` | プロセス一覧 (最大 100 件) | readonly |
+| `get_service_status` | systemd サービスの状態確認 | readonly |
+| `get_service_logs` | journalctl ログ取得 | readonly |
+| `read_file` | ファイル読み取り (allowlist 内のみ) | readonly |
+| `restart_service` | サービス再起動 (**人間承認が必要**) | operator |
+| `execute_command` | コマンド実行 (allowlist 内のみ、**人間承認が必要**) | operator |
+
+---
+
+## セキュリティモデル
+
+### 3 段階の認証境界
+
+```
+管理者          ── Basic 認証 / OIDC ──▶  管理コンソール (:8080)
+MCP 利用者      ── MCP Bearer トークン ──▶  MCP Server (:8090)
+MCP Server      ── mTLS + Agent credential ──▶  Linux Agent (:8443)
+```
+
+- **AI ≠ root**: Agent は専用 Unix ユーザーで動作、root 権限なし
+- **deny by default**: allowlist に載っていないコマンド・ファイルは一切拒否
+- **認証と認可を分離**: トークンは「誰か」を証明するだけ。「何ができるか」は scope と allowlist が決める
+- **人間承認ゲート**: operator 操作は承認なしに実行不可
+- **監査ログ**: 全操作を JSONL に記録。ハッシュチェーンで改ざん防止
+
+### セキュリティレベル別構成
+
+| Level | 用途 | 主な要件 |
+|-------|------|----------|
+| **1** | 個人・開発環境 | HTTPS + Bearer Token |
+| **2** | VPS・検証環境 | + Private Network + Allowlist + Audit Log + 人間承認 |
+| **3** | 本番・複数管理者 | + mTLS + Policy Engine + SIEM + Token ローテーション |
+
+詳細は [doc/Security.md](doc/Security.md) を参照してください。
+
+---
 
 ## クイックスタート
 
-### 1. 依存環境
-
-**MCP Server (Python):**
-```bash
-cd mcp-server
-pip install -r requirements.txt
-```
-
-**Linux Agent (Go 1.22+):**
-```bash
-# Goが未インストールの場合 (Linux)
-wget https://go.dev/dl/go1.22.5.linux-amd64.tar.gz
-sudo rm -rf /usr/local/go
-sudo tar -C /usr/local -xzf go1.22.5.linux-amd64.tar.gz
-export PATH=$PATH:/usr/local/go/bin
-
-# 確認
-go version
-```
-
-### 2. 管理コンソールとMCP HTTPサーバー起動
+### 1. 管理コンソール起動 (Docker)
 
 ```bash
-python -m app
-# → http://127.0.0.1:8080/ で社内管理コンソール
+git clone https://github.com/Hana4219/Linux_Remote_Management_MCP.git
+cd Linux_Remote_Management_MCP
 
-# 別プロセスで起動
-python -m app.mcp_http_entry
-# → http://127.0.0.1:8090/ で MCP streamable HTTP
+# .env でパスワードを設定 (任意)
+echo "LINUX_MCP_CONSOLE_PASS=your-password" >> .env
+
+docker compose -f docker-compose.mcp.yml up -d
+
+# → http://127.0.0.1:8080  管理コンソール
+# → http://127.0.0.1:8090  MCP Streamable HTTP
 ```
 
-### 3. MCP (stdio) クライアント設定
+### 2. Linux Agent を管理対象サーバーに導入
 
-`claude_desktop_config.json` に以下を追加:
+```bash
+# Agent ホスト上で実行
+cd lrm-mcp-agent
+make build          # または make dist (Goなし環境はDocker)
+
+# 専用ユーザー作成・systemd 登録・credential 発行・Console 登録まで一括
+sudo ./scripts/setup.sh --provision
+```
+
+### 3. Claude Desktop に接続
+
+`claude_desktop_config.json` に追加:
 
 ```json
 {
   "mcpServers": {
     "linux-remote-management": {
-      "command": "python -m app.mcp_entry",
-      "cwd": "/path/to/mcp-server"
+      "command": "python",
+      "args": ["-m", "app.mcp_entry"],
+      "cwd": "/path/to/mcp-server",
+      "env": {
+        "LINUX_MCP_TOKEN": "<発行したMCPトークン>"
+      }
     }
   }
 }
 ```
 
-## 管理コンソール機能
+または MCP Streamable HTTP を使う場合:
 
-### ノード一覧
-- 各ノードの **インストール状況** (running / auth_error / not_responding / unreachable / no_token)
-- **OSバージョン** / **カーネル** / **ホスト名** / **稼働時間**
-- **Agent バージョン** / **レイテンシ**
-- 30秒間隔の自動リフレッシュ
+```json
+{
+  "mcpServers": {
+    "linux-remote-management": {
+      "url": "http://127.0.0.1:8090/mcp",
+      "headers": {
+        "Authorization": "Bearer <発行したMCPトークン>"
+      }
+    }
+  }
+}
+```
 
-### MCP トークン管理
-- **発行**: `POST /api/tokens` — 生トークンを一度だけ返す
-- **再表示**: `GET /api/tokens/{id}/reveal` — 管理Consoleのトークン一覧から行クリックで生トークンを再表示 (admin限定、アクセスごとに監査ログ記録)
-- **登録**: `POST /api/tokens/import` — 外部で発行済みトークンを登録
-- **失効**: `POST /api/tokens/{id}/revoke` — 即座に Agent 認証無効化
-- **削除**: `DELETE /api/tokens/{id}`
-- トークンは `data/tokens.db` (SQLite) に **SHA256 ハッシュ + 生値** (0600) で保存
+---
 
-### API エンドポイント
+## Linux Agent API エンドポイント
 
 | メソッド | パス | 説明 |
 |---------|------|------|
-| GET | `/api/meta` | アプリ/サーバー/スコープメタ |
-| GET | `/api/nodes` | ノード一覧 (Agent を並行呼び出し) |
-| GET | `/api/nodes/{id}` | ノード詳細 (system / disk / プロセス数) |
-| GET | `/api/nodes/{id}/disk` | ディスク使用状況 |
-| GET | `/api/nodes/{id}/processes` | プロセス一覧 |
-| GET | `/api/tokens` | トークン一覧 (生値非表示) |
-| POST | `/api/tokens` | トークン発行 (生値一度だけ返す) |
-| GET | `/api/tokens/{id}/reveal` | 生トークン再表示 (admin限定・監査ログ記録) |
-| POST | `/api/tokens/import` | 外部発行トークン登録 |
-| POST | `/api/tokens/{id}/revoke` | トークン失効 |
-| DELETE | `/api/tokens/{id}` | トークン削除 |
+| GET | `/v1/health` | ヘルスチェック (認証不要) |
+| GET | `/v1/system` | システム情報 |
+| GET | `/v1/disk` | ディスク使用状況 |
+| GET | `/v1/processes` | プロセス一覧 |
+| GET | `/v1/services/{name}` | サービス状態 |
+| POST | `/v1/services/{name}/restart` | サービス再起動 (operator) |
+| GET | `/v1/services/{name}/logs` | サービスログ |
+| GET | `/v1/files?path=...` | ファイル読み取り |
+| POST | `/v1/execute` | コマンド実行 (operator) |
+| GET | `/metrics` | Prometheus メトリクス |
 
-## 開発/テスト
+---
 
-### モック Agent での E2E テスト
+## ディレクトリ構成
 
-```bash
-# ターミナル1: モック Agent 起動 (8443)
-python -m tools.mock_agent --port 8443 --hostname dev-web-01 --token dev-token
-
-# ターミナル2: コンソール起動
-python -m app
-# → http://127.0.0.1:8080/ でノード一覧を確認
+```
+Linux_Remote_Management_MCP/
+├── mcp-server/          # Python / FastAPI (MCP Server + 管理コンソール)
+│   ├── app/             # アプリケーションコード
+│   ├── config.yml       # サーバー・Agent・認証設定
+│   └── data/            # tokens.db (SQLite, 0600) ← Git 除外
+├── lrm-mcp-agent/       # Go (Linux Agent バイナリ)
+│   ├── internal/agent/  # 認証・API・ポリシーエンジン
+│   ├── cmd/             # lrm-mcp-agent / credential-issue CLI
+│   ├── scripts/         # setup.sh / systemd unit / firewall
+│   └── config.yml       # Agent 設定 (token hash / allowlist)
+├── console/             # 管理コンソール UI (FastAPI + vanilla JS)
+├── doc/                 # 設計書・運用マニュアル・スクリーンショット
+│   ├── Design.md        # アーキテクチャ設計
+│   ├── Security.md      # セキュリティレベル別構成
+│   ├── Operations.md    # 運用マニュアル (token ローテーション等)
+│   └── screenshots/     # 本 README の画面キャプチャ
+└── docker-compose.mcp.yml
 ```
 
-`config.yml` の `servers` に登録されたノードの `url` に対して、
-コンソールは自動的に発行済みトークンを Bearer 認証として付与し `GET /v1/health` を呼び出します。
+---
 
-### トークン発行 (console上でも可能)
+## ドキュメント
 
-```bash
-# CLI でトークン発行
-python -c "
-from app.config import load_config
-from app.db import TokenStore
-from app.main import create_app
-app = create_app()
-store = app.state.store
-record, raw = store.create_token(name='cli', server_ids=['*'], scope='readonly')
-print('ID:', record.id)
-print('Token:', raw)
-"
-```
+| ドキュメント | 内容 |
+|-------------|------|
+| [doc/Design.md](doc/Design.md) | アーキテクチャ・設計思想・セキュリティ目標 |
+| [doc/Security.md](doc/Security.md) | Level 1〜3 セキュリティ構成ガイド |
+| [doc/Operations.md](doc/Operations.md) | セットアップ・トークン管理・障害対応 |
+| [doc/mTLS.md](doc/mTLS.md) | mTLS 設定手順 |
+| [doc/OIDC.md](doc/OIDC.md) | OIDC 認証設定 |
+| [lrm-mcp-agent/README.md](lrm-mcp-agent/README.md) | Linux Agent ビルド・設定・デプロイ詳細 |
 
-## 設定 (config.yml)
-
-```yaml
-console:
-  host: 127.0.0.1
-  port: 8080
-  data_dir: ./data
-  mcp_http: true
-  # username: admin       # Basic認証を有効化 (任意)
-  # password: change-me
-
-agent:
-  timeout_seconds: 3
-  tls_verify: true
-
-servers:
-  - id: prod-web-01
-    name: "本番 Web #01"
-    url: https://prod-web-01.internal:8443
-    env: production
-```
-
-## セキュリティ
-
-### トークン管理
-- トークンは CSPRNG (64バイト) で生成
-- 生トークンは **AES-256-GCM** で暗号化して DB に保存 (`app/secretbox.py`)
-- トークン発行時は生トークンを1回のみ返し、2回目は取得不可
-- `data/tokens.db` はファイルパーミッション 0600
-
-### 認証・認可
-- Agent への通信は **Bearer Token** 認証 (constant-time 比較)
-- OIDC ブラウザログイン (Authorization Code + PKCE) 対応
-- mTLS (双方向認証) 対応 - クライアント証明書検証
-- Policy Engine (スコープベース認可) - readonly/operator
-
-### レート制限
-- **IP+トークン複合キー** で計上 (同一NAT配下の複数クライアントを分離)
-- 操作系は読み取りと独立したバケットで制限
-- 超過時: 429 Too Many Requests
-
-### 監査ログ
-- 構造化 JSONL、0600 パーミッション
-- **ハッシュチェーン** による改ざん防止 (Agent側と同方式)
-- SIEM  webhook 転送 (CEF/LEEF/JSON 形式対応)
-- ローテーション (サイズベース、世代管理、gzip圧縮)
-
-### 設定ファイルの機密情報保護
-- シークレットは環境変数参照 (`${ENV_VAR}`) 形式
-- `config.yml` は Git 管理可能 (シークレットは含まれない)
-- `save()` 時に参照を保持 (平文が書き出されない)
-
-### 運用スクリプト
-- systemd サービス化 (linux-mcp-console, linux-mcp-http, lrm-mcp-agent)
-- ファイアウォール設定 (UFW/iptables対応)
-- バックアップ・モニタリング・ログローテーション
-
-### ネットワーク
-- 社内ネットワークでのみアクセス可能なホスト (127.0.0.1) で listen
-- 本番では Secret Store (Vault 等) との連携を推奨
+---
 
 ## ライセンス
 

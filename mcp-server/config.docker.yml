@@ -11,6 +11,8 @@ console:
   data_dir: "./data"
   auth_required: true
   auth_mode: basic
+  rate_limit_per_minute: 300
+  rate_limit_burst: 60
 
 mcp:
   host: "0.0.0.0"
